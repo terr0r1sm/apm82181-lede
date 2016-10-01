@@ -1,0 +1,2664 @@
+From 8c9b4bc7e3a88970fe0fc308034627b8ae972600 Mon Sep 17 00:00:00 2001
+From: Christian Lamparter <chunkeey@gmail.com>
+Date: Sun, 1 Oct 2017 13:29:17 +0200
+Subject: [PATCH 01/13] crypto: crypto4xx: wire up hmac_mc to hmac_muting
+
+The hmac_mc parameter of set_dynamic_sa_command_1()
+was defined but not used. On closer inspection it
+turns out, it was never wired up.
+
+Signed-off-by: Christian Lamparter <chunkeey@gmail.com>
+---
+ drivers/crypto/amcc/crypto4xx_alg.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/crypto/amcc/crypto4xx_alg.c b/drivers/crypto/amcc/crypto4xx_alg.c
+index d08e4c94abed..57b1dcef4cb4 100644
+--- a/drivers/crypto/amcc/crypto4xx_alg.c
++++ b/drivers/crypto/amcc/crypto4xx_alg.c
+@@ -63,6 +63,7 @@ static void set_dynamic_sa_command_1(struct dynamic_sa_ctl *sa, u32 cm,
+ 	sa->sa_command_1.bf.crypto_mode9_8 = cm & 3;
+ 	sa->sa_command_1.bf.feedback_mode = cfb,
+ 	sa->sa_command_1.bf.sa_rev = 1;
++	sa->sa_command_1.bf.hmac_muting = hmac_mc;
+ 	sa->sa_command_1.bf.extended_seq_num = esn;
+ 	sa->sa_command_1.bf.seq_num_mask = sn_mask;
+ 	sa->sa_command_1.bf.mutable_bit_proc = mute;
+-- 
+2.14.2
+
+From 797afe0175f10d30c33ce84a0bcc814ff95767e8 Mon Sep 17 00:00:00 2001
+From: Christian Lamparter <chunkeey@gmail.com>
+Date: Sun, 1 Oct 2017 13:29:17 +0200
+Subject: [PATCH 02/13] crypto: crypto4xx: fix off-by-one AES-OFB
+
+I used aes-cbc as a template for ofb. But sadly I forgot
+to update set_key method to crypto4xx_setkey_aes_ofb().
+
+this was caught by the testmgr:
+alg: skcipher: Test 1 failed (invalid result) on encr. for ofb-aes-ppc4xx
+00000000: 76 49 ab ac 81 19 b2 46 ce e9 8e 9b 12 e9 19 7d
+00000010: 50 86 cb 9b 50 72 19 ee 95 db 11 3a 91 76 78 b2
+00000020: 73 be d6 b8 e3 c1 74 3b 71 16 e6 9e 22 22 95 16
+00000030: 3f f1 ca a1 68 1f ac 09 12 0e ca 30 75 86 e1 a7
+
+With the correct set_key method, the aes-ofb cipher passes the test.
+
+name         : ofb(aes)
+driver       : ofb-aes-ppc4xx
+module       : crypto4xx
+priority     : 300
+refcnt       : 1
+selftest     : passed
+internal     : no
+type         : ablkcipher
+async        : yes
+blocksize    : 16
+min keysize  : 16
+max keysize  : 32
+ivsize       : 16
+geniv        : <default>
+
+Signed-off-by: Christian Lamparter <chunkeey@gmail.com>
+---
+ drivers/crypto/amcc/crypto4xx_core.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/crypto/amcc/crypto4xx_core.c b/drivers/crypto/amcc/crypto4xx_core.c
+index 773e5faebc47..cb45365166ae 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.c
++++ b/drivers/crypto/amcc/crypto4xx_core.c
+@@ -1148,7 +1148,7 @@ struct crypto4xx_alg_common crypto4xx_alg[] = {
+ 				.min_keysize	= AES_MIN_KEY_SIZE,
+ 				.max_keysize	= AES_MAX_KEY_SIZE,
+ 				.ivsize		= AES_IV_SIZE,
+-				.setkey		= crypto4xx_setkey_aes_cbc,
++				.setkey		= crypto4xx_setkey_aes_ofb,
+ 				.encrypt	= crypto4xx_encrypt,
+ 				.decrypt	= crypto4xx_decrypt,
+ 			}
+-- 
+2.14.2
+
+From e53844a4a81ec2d60a3fc4dc4b17f54bb14f45e4 Mon Sep 17 00:00:00 2001
+From: Christian Lamparter <chunkeey@gmail.com>
+Date: Tue, 3 Oct 2017 22:46:23 +0200
+Subject: [PATCH 03/13] crypto: crypto4xx: fix type mismatch compiler error
+
+This patch fixes a type mismatch error that I accidentally
+introduced when I moved and refactored the dynamic_contents
+helpers.
+
+Signed-off-by: Christian Lamparter <chunkeey@gmail.com>
+---
+ drivers/crypto/amcc/crypto4xx_sa.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/crypto/amcc/crypto4xx_sa.h b/drivers/crypto/amcc/crypto4xx_sa.h
+index 7cc04f1ff8a0..8040c82dc354 100644
+--- a/drivers/crypto/amcc/crypto4xx_sa.h
++++ b/drivers/crypto/amcc/crypto4xx_sa.h
+@@ -266,9 +266,9 @@ get_dynamic_sa_offset_state_ptr_field(struct dynamic_sa_ctl *cts)
+ 	return sizeof(struct dynamic_sa_ctl) + offset * 4;
+ }
+ 
+-static inline u8 *get_dynamic_sa_key_field(struct dynamic_sa_ctl *cts)
++static inline u32 *get_dynamic_sa_key_field(struct dynamic_sa_ctl *cts)
+ {
+-	return (u8 *) ((unsigned long)cts + sizeof(struct dynamic_sa_ctl));
++	return (u32 *) ((unsigned long)cts + sizeof(struct dynamic_sa_ctl));
+ }
+ 
+ #endif
+-- 
+2.14.2
+
+From 81f5ee6cd79bd9ac319ace2cd7d778336b01b2d2 Mon Sep 17 00:00:00 2001
+From: Christian Lamparter <chunkeey@gmail.com>
+Date: Sun, 1 Oct 2017 13:37:11 +0200
+Subject: [PATCH 04/13] crypto: crypto4xx: increase context and scatter ring
+ buffer elements
+
+If crypto4xx is used in conjunction with dm-crypt, the available
+ring buffer elements are not enough to handle the load properly.
+
+On an aes-cbc-essiv:sha256 encrypted swap partition the read
+performance is abyssal: (tested with hdparm -t)
+
+/dev/mapper/swap_crypt:
+ Timing buffered disk reads:  14 MB in  3.68 seconds =   3.81 MB/sec
+
+The patch increases both PPC4XX_NUM_SD and PPC4XX_NUM_PD to 256.
+This improves the performance considerably:
+
+/dev/mapper/swap_crypt:
+ Timing buffered disk reads: 104 MB in  3.03 seconds =  34.31 MB/sec
+
+Furthermore, PPC4XX_LAST_SD, PPC4XX_LAST_GD and PPC4XX_LAST_PD
+can be easily calculated from their respective PPC4XX_NUM_*
+constant.
+
+Signed-off-by: Christian Lamparter <chunkeey@gmail.com>
+---
+ drivers/crypto/amcc/crypto4xx_core.h | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/crypto/amcc/crypto4xx_core.h b/drivers/crypto/amcc/crypto4xx_core.h
+index 97fb8288ab30..27e439c1f5bf 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.h
++++ b/drivers/crypto/amcc/crypto4xx_core.h
+@@ -36,12 +36,12 @@
+ #define PPC405EX_CE_RESET                       0x00000008
+ 
+ #define CRYPTO4XX_CRYPTO_PRIORITY		300
+-#define PPC4XX_LAST_PD				63
+-#define PPC4XX_NUM_PD				64
+-#define PPC4XX_LAST_GD				1023
++#define PPC4XX_NUM_PD				256
++#define PPC4XX_LAST_PD				(PPC4XX_NUM_PD - 1)
+ #define PPC4XX_NUM_GD				1024
+-#define PPC4XX_LAST_SD				63
+-#define PPC4XX_NUM_SD				64
++#define PPC4XX_LAST_GD				(PPC4XX_NUM_GD - 1)
++#define PPC4XX_NUM_SD				256
++#define PPC4XX_LAST_SD				(PPC4XX_NUM_SD - 1)
+ #define PPC4XX_SD_BUFFER_SIZE			2048
+ 
+ #define PD_ENTRY_INUSE				1
+-- 
+2.14.2
+
+From 85525066b4f6058953d745c59588ab9f450a3703 Mon Sep 17 00:00:00 2001
+From: Christian Lamparter <chunkeey@gmail.com>
+Date: Sun, 1 Oct 2017 13:59:59 +0200
+Subject: [PATCH 05/13] crypto: crypto4xx: add backlog queue support
+
+Previously, If the crypto4xx driver used all available
+security contexts, it would simply refuse new requests
+with -EAGAIN. CRYPTO_TFM_REQ_MAY_BACKLOG was ignored.
+
+in case of dm-crypt.c's crypt_convert() function this was
+causing the following errors to manifest, if the system was
+pushed hard enough:
+
+| EXT4-fs warning (dm-1): ext4_end_bio:314: I/O error -5 writing to ino ..
+| EXT4-fs warning (dm-1): ext4_end_bio:314: I/O error -5 writing to ino ..
+| EXT4-fs warning (dm-1): ext4_end_bio:314: I/O error -5 writing to ino ..
+| JBD2: Detected IO errors while flushing file data on dm-1-8
+| Aborting journal on device dm-1-8.
+| EXT4-fs error : ext4_journal_check_start:56: Detected aborted journal
+| EXT4-fs (dm-1): Remounting filesystem read-only
+| EXT4-fs : ext4_writepages: jbd2_start: 2048 pages, inode 498...; err -30
+
+(This did cause corruptions due to failed writes)
+
+To fix this mess, the crypto4xx driver needs to notifiy the
+user to slow down. This can be achieved by returning -EBUSY
+on requests, once the crypto hardware was falling behind.
+
+Note: -EBUSY has two different meanings. Setting the flag
+CRYPTO_TFM_REQ_MAY_BACKLOG implies that the request was
+successfully queued, by the crypto driver. To achieve this
+requirement, the implementation introduces a threshold check and
+adds logic to the completion routines in much the same way as
+AMD's Cryptographic Coprocessor (CCP) driver do.
+
+Note2: Tests showed that dm-crypt starved ipsec traffic.
+Under load, ipsec links dropped to 0 Kbits/s. This is because
+dm-crypt's callback would instantly queue the next request.
+In order to not starve ipsec, the driver reserves a small
+portion of the available crypto contexts for this purpose.
+
+Signed-off-by: Christian Lamparter <chunkeey@gmail.com>
+---
+ drivers/crypto/amcc/crypto4xx_core.c | 47 ++++++++++++++++++++++++++++++------
+ drivers/crypto/amcc/crypto4xx_core.h |  3 ++-
+ 2 files changed, 41 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/crypto/amcc/crypto4xx_core.c b/drivers/crypto/amcc/crypto4xx_core.c
+index cb45365166ae..abdf1db9b0eb 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.c
++++ b/drivers/crypto/amcc/crypto4xx_core.c
+@@ -39,6 +39,7 @@
+ #include <crypto/ctr.h>
+ #include <crypto/sha.h>
+ #include <crypto/scatterwalk.h>
++#include <crypto/internal/skcipher.h>
+ #include "crypto4xx_reg_def.h"
+ #include "crypto4xx_core.h"
+ #include "crypto4xx_sa.h"
+@@ -573,8 +574,10 @@ static u32 crypto4xx_ablkcipher_done(struct crypto4xx_device *dev,
+ 				    dst->offset, dst->length, DMA_FROM_DEVICE);
+ 	}
+ 	crypto4xx_ret_sg_desc(dev, pd_uinfo);
+-	if (ablk_req->base.complete != NULL)
+-		ablk_req->base.complete(&ablk_req->base, 0);
++
++	if (pd_uinfo->state & PD_ENTRY_BUSY)
++		ablkcipher_request_complete(ablk_req, -EINPROGRESS);
++	ablkcipher_request_complete(ablk_req, 0);
+ 
+ 	return 0;
+ }
+@@ -591,9 +594,10 @@ static u32 crypto4xx_ahash_done(struct crypto4xx_device *dev,
+ 	crypto4xx_copy_digest_to_dst(pd_uinfo,
+ 				     crypto_tfm_ctx(ahash_req->base.tfm));
+ 	crypto4xx_ret_sg_desc(dev, pd_uinfo);
+-	/* call user provided callback function x */
+-	if (ahash_req->base.complete != NULL)
+-		ahash_req->base.complete(&ahash_req->base, 0);
++
++	if (pd_uinfo->state & PD_ENTRY_BUSY)
++		ahash_request_complete(ahash_req, -EINPROGRESS);
++	ahash_request_complete(ahash_req, 0);
+ 
+ 	return 0;
+ }
+@@ -704,6 +708,7 @@ u32 crypto4xx_build_pd(struct crypto_async_request *req,
+ 	struct pd_uinfo *pd_uinfo = NULL;
+ 	unsigned int nbytes = datalen, idx;
+ 	u32 gd_idx = 0;
++	bool is_busy;
+ 
+ 	/* figure how many gd is needed */
+ 	num_gd = sg_nents_for_len(src, datalen);
+@@ -734,6 +739,31 @@ u32 crypto4xx_build_pd(struct crypto_async_request *req,
+ 	 * already got must be return the original place.
+ 	 */
+ 	spin_lock_irqsave(&dev->core_dev->lock, flags);
++	/*
++	 * Let the caller know to slow down, once more than 13/16ths = 81%
++	 * of the available data contexts are being used simultaneously.
++	 *
++	 * With PPC4XX_NUM_PD = 256, this will leave a "backlog queue" for
++	 * 31 more contexts. Before new requests have to be rejected.
++	 */
++	if (req->flags & CRYPTO_TFM_REQ_MAY_BACKLOG) {
++		is_busy = ((dev->pdr_head - dev->pdr_tail) % PPC4XX_NUM_PD) >=
++			((PPC4XX_NUM_PD * 13) / 16);
++	} else {
++		/*
++		 * To fix contention issues between ipsec (no blacklog) and
++		 * dm-crypto (backlog) reserve 32 entries for "no backlog"
++		 * data contexts.
++		 */
++		is_busy = ((dev->pdr_head - dev->pdr_tail) % PPC4XX_NUM_PD) >=
++			((PPC4XX_NUM_PD * 15) / 16);
++
++		if (is_busy) {
++			spin_unlock_irqrestore(&dev->core_dev->lock, flags);
++			return -EBUSY;
++		}
++	}
++
+ 	if (num_gd) {
+ 		fst_gd = crypto4xx_get_n_gd(dev, num_gd);
+ 		if (fst_gd == ERING_WAS_FULL) {
+@@ -888,11 +918,12 @@ u32 crypto4xx_build_pd(struct crypto_async_request *req,
+ 	sa->sa_command_1.bf.hash_crypto_offset = 0;
+ 	pd->pd_ctl.w = ctx->pd_ctl;
+ 	pd->pd_ctl_len.w = 0x00400000 | datalen;
+-	pd_uinfo->state = PD_ENTRY_INUSE;
++	pd_uinfo->state = PD_ENTRY_INUSE | (is_busy ? PD_ENTRY_BUSY : 0);
++
+ 	wmb();
+ 	/* write any value to push engine to read a pd */
+ 	writel(1, dev->ce_base + CRYPTO4XX_INT_DESCR_RD);
+-	return -EINPROGRESS;
++	return is_busy ? -EBUSY : -EINPROGRESS;
+ }
+ 
+ /**
+@@ -997,7 +1028,7 @@ static void crypto4xx_bh_tasklet_cb(unsigned long data)
+ 		tail = core_dev->dev->pdr_tail;
+ 		pd_uinfo = &core_dev->dev->pdr_uinfo[tail];
+ 		pd = &core_dev->dev->pdr[tail];
+-		if ((pd_uinfo->state == PD_ENTRY_INUSE) &&
++		if ((pd_uinfo->state & PD_ENTRY_INUSE) &&
+ 				   pd->pd_ctl.bf.pe_done &&
+ 				   !pd->pd_ctl.bf.host_ready) {
+ 			pd->pd_ctl.bf.pe_done = 0;
+diff --git a/drivers/crypto/amcc/crypto4xx_core.h b/drivers/crypto/amcc/crypto4xx_core.h
+index 27e439c1f5bf..dbe29043e0c5 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.h
++++ b/drivers/crypto/amcc/crypto4xx_core.h
+@@ -44,7 +44,8 @@
+ #define PPC4XX_LAST_SD				(PPC4XX_NUM_SD - 1)
+ #define PPC4XX_SD_BUFFER_SIZE			2048
+ 
+-#define PD_ENTRY_INUSE				1
++#define PD_ENTRY_BUSY				BIT(1)
++#define PD_ENTRY_INUSE				BIT(0)
+ #define PD_ENTRY_FREE				0
+ #define ERING_WAS_FULL				0xffffffff
+ 
+-- 
+2.14.2
+
+From bd4aea377ea0ace4058420b789272164cb276b86 Mon Sep 17 00:00:00 2001
+From: Christian Lamparter <chunkeey@gmail.com>
+Date: Sun, 1 Oct 2017 14:17:33 +0200
+Subject: [PATCH 06/13] crypto: crypto4xx: use the correct LE32 format for IV
+ and key defs
+
+The hardware expects that the keys, IVs (and inner/outer hashes)
+are in the le32 format.
+
+This patch changes all hardware interface declarations to use
+the correct LE32 data format for each field.
+
+In order to pass __CHECK_ENDIAN__ checks, crypto4xx_memcpy_le
+has to be honest about the endianness of its parameters.
+The function was split and moved to the common crypto4xx_core.h
+header. This allows the compiler to generate better code if the
+sizes/len is a constant (various *_IV_LEN).
+
+Please note that the hardware isn't consistent with the endiannes
+of the save_digest field in the state record struct though.
+The hashes produced by GHASH and CBC (for CCM) will be in LE32.
+Whereas md5 and sha{1/,256,...} do not need any conversion.
+
+Signed-off-by: Christian Lamparter <chunkeey@gmail.com>
+---
+ drivers/crypto/amcc/crypto4xx_alg.c  |  4 +--
+ drivers/crypto/amcc/crypto4xx_core.c | 40 ++----------------------------
+ drivers/crypto/amcc/crypto4xx_core.h | 47 +++++++++++++++++++++++++++++++++---
+ drivers/crypto/amcc/crypto4xx_sa.h   | 29 ++++++++++++----------
+ 4 files changed, 64 insertions(+), 56 deletions(-)
+
+diff --git a/drivers/crypto/amcc/crypto4xx_alg.c b/drivers/crypto/amcc/crypto4xx_alg.c
+index 57b1dcef4cb4..0e1d110a6405 100644
+--- a/drivers/crypto/amcc/crypto4xx_alg.c
++++ b/drivers/crypto/amcc/crypto4xx_alg.c
+@@ -149,8 +149,8 @@ static int crypto4xx_setkey_aes(struct crypto_ablkcipher *cipher,
+ 				 SA_SEQ_MASK_OFF, SA_MC_ENABLE,
+ 				 SA_NOT_COPY_PAD, SA_NOT_COPY_PAYLOAD,
+ 				 SA_NOT_COPY_HDR);
+-	crypto4xx_memcpy_le(get_dynamic_sa_key_field(sa),
+-			    key, keylen);
++	crypto4xx_memcpy_to_le32(get_dynamic_sa_key_field(sa),
++				 key, keylen);
+ 	sa->sa_contents.w = SA_AES_CONTENTS | (keylen << 2);
+ 	sa->sa_command_1.bf.key_len = keylen >> 3;
+ 	ctx->is_hash = 0;
+diff --git a/drivers/crypto/amcc/crypto4xx_core.c b/drivers/crypto/amcc/crypto4xx_core.c
+index abdf1db9b0eb..c936d68f19ad 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.c
++++ b/drivers/crypto/amcc/crypto4xx_core.c
+@@ -614,42 +614,6 @@ static u32 crypto4xx_pd_done(struct crypto4xx_device *dev, u32 idx)
+ 		return crypto4xx_ahash_done(dev, pd_uinfo);
+ }
+ 
+-/**
+- * Note: Only use this function to copy items that is word aligned.
+- */
+-void crypto4xx_memcpy_le(unsigned int *dst,
+-			 const unsigned char *buf,
+-			 int len)
+-{
+-	u8 *tmp;
+-	for (; len >= 4; buf += 4, len -= 4)
+-		*dst++ = cpu_to_le32(*(unsigned int *) buf);
+-
+-	tmp = (u8 *)dst;
+-	switch (len) {
+-	case 3:
+-		*tmp++ = 0;
+-		*tmp++ = *(buf+2);
+-		*tmp++ = *(buf+1);
+-		*tmp++ = *buf;
+-		break;
+-	case 2:
+-		*tmp++ = 0;
+-		*tmp++ = 0;
+-		*tmp++ = *(buf+1);
+-		*tmp++ = *buf;
+-		break;
+-	case 1:
+-		*tmp++ = 0;
+-		*tmp++ = 0;
+-		*tmp++ = 0;
+-		*tmp++ = *buf;
+-		break;
+-	default:
+-		break;
+-	}
+-}
+-
+ static void crypto4xx_stop_all(struct crypto4xx_core_device *core_dev)
+ {
+ 	crypto4xx_destroy_pdr(core_dev->dev);
+@@ -809,8 +773,8 @@ u32 crypto4xx_build_pd(struct crypto_async_request *req,
+ 			&pd_uinfo->sr_pa, 4);
+ 
+ 		if (iv_len)
+-			crypto4xx_memcpy_le(pd_uinfo->sr_va->save_iv,
+-					    iv, iv_len);
++			crypto4xx_memcpy_to_le32(pd_uinfo->sr_va->save_iv,
++						 iv, iv_len);
+ 	} else {
+ 		if (ctx->direction == DIR_INBOUND) {
+ 			pd->sa = ctx->sa_in_dma_addr;
+diff --git a/drivers/crypto/amcc/crypto4xx_core.h b/drivers/crypto/amcc/crypto4xx_core.h
+index dbe29043e0c5..2df6874edee1 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.h
++++ b/drivers/crypto/amcc/crypto4xx_core.h
+@@ -166,9 +166,7 @@ int crypto4xx_alloc_sa(struct crypto4xx_ctx *ctx, u32 size);
+ void crypto4xx_free_sa(struct crypto4xx_ctx *ctx);
+ void crypto4xx_free_ctx(struct crypto4xx_ctx *ctx);
+ u32 crypto4xx_alloc_state_record(struct crypto4xx_ctx *ctx);
+-void crypto4xx_memcpy_le(unsigned int *dst,
+-			 const unsigned char *buf, int len);
+-u32 crypto4xx_build_pd(struct crypto_async_request *req,
++int crypto4xx_build_pd(struct crypto_async_request *req,
+ 		       struct crypto4xx_ctx *ctx,
+ 		       struct scatterlist *src,
+ 		       struct scatterlist *dst,
+@@ -193,4 +191,47 @@ int crypto4xx_hash_digest(struct ahash_request *req);
+ int crypto4xx_hash_final(struct ahash_request *req);
+ int crypto4xx_hash_update(struct ahash_request *req);
+ int crypto4xx_hash_init(struct ahash_request *req);
++
++/**
++ * Note: Only use this function to copy items that is word aligned.
++ */
++static inline void crypto4xx_memcpy_swab32(u32 *dst, const void *buf,
++					   size_t len)
++{
++	for (; len >= 4; buf += 4, len -= 4)
++		*dst++ = __swab32p((u32 *) buf);
++
++	if (len) {
++		const u8 *tmp = (u8 *)buf;
++
++		switch (len) {
++		case 3:
++			*dst = (tmp[2] << 16) |
++			       (tmp[1] << 8) |
++			       tmp[0];
++			break;
++		case 2:
++			*dst = (tmp[1] << 8) |
++			       tmp[0];
++			break;
++		case 1:
++			*dst = tmp[0];
++			break;
++		default:
++			break;
++		}
++	}
++}
++
++static inline void crypto4xx_memcpy_from_le32(u32 *dst, const void *buf,
++					      size_t len)
++{
++	crypto4xx_memcpy_swab32(dst, buf, len);
++}
++
++static inline void crypto4xx_memcpy_to_le32(__le32 *dst, const void *buf,
++					    size_t len)
++{
++	crypto4xx_memcpy_swab32((u32 *)dst, buf, len);
++}
+ #endif
+diff --git a/drivers/crypto/amcc/crypto4xx_sa.h b/drivers/crypto/amcc/crypto4xx_sa.h
+index 8040c82dc354..b79da98dc9a9 100644
+--- a/drivers/crypto/amcc/crypto4xx_sa.h
++++ b/drivers/crypto/amcc/crypto4xx_sa.h
+@@ -181,9 +181,12 @@ struct dynamic_sa_ctl {
+  * State Record for Security Association (SA)
+  */
+ struct  sa_state_record {
+-	u32 save_iv[4];
+-	u32 save_hash_byte_cnt[2];
+-	u32 save_digest[16];
++	__le32 save_iv[4];
++	__le32 save_hash_byte_cnt[2];
++	union {
++		u32 save_digest[16]; /* for MD5/SHA */
++		__le32 save_digest_le32[16]; /* GHASH / CBC */
++	};
+ } __attribute__((packed));
+ 
+ /**
+@@ -192,8 +195,8 @@ struct  sa_state_record {
+  */
+ struct dynamic_sa_aes128 {
+ 	struct dynamic_sa_ctl	ctrl;
+-	u32 key[4];
+-	u32 iv[4]; /* for CBC, OFC, and CFB mode */
++	__le32 key[4];
++	__le32 iv[4]; /* for CBC, OFC, and CFB mode */
+ 	u32 state_ptr;
+ 	u32 reserved;
+ } __attribute__((packed));
+@@ -206,8 +209,8 @@ struct dynamic_sa_aes128 {
+  */
+ struct dynamic_sa_aes192 {
+ 	struct dynamic_sa_ctl ctrl;
+-	u32 key[6];
+-	u32 iv[4]; /* for CBC, OFC, and CFB mode */
++	__le32 key[6];
++	__le32 iv[4]; /* for CBC, OFC, and CFB mode */
+ 	u32 state_ptr;
+ 	u32 reserved;
+ } __attribute__((packed));
+@@ -220,8 +223,8 @@ struct dynamic_sa_aes192 {
+  */
+ struct dynamic_sa_aes256 {
+ 	struct dynamic_sa_ctl ctrl;
+-	u32 key[8];
+-	u32 iv[4]; /* for CBC, OFC, and CFB mode */
++	__le32 key[8];
++	__le32 iv[4]; /* for CBC, OFC, and CFB mode */
+ 	u32 state_ptr;
+ 	u32 reserved;
+ } __attribute__((packed));
+@@ -235,8 +238,8 @@ struct dynamic_sa_aes256 {
+  */
+ struct dynamic_sa_hash160 {
+ 	struct dynamic_sa_ctl ctrl;
+-	u32 inner_digest[5];
+-	u32 outer_digest[5];
++	__le32 inner_digest[5];
++	__le32 outer_digest[5];
+ 	u32 state_ptr;
+ 	u32 reserved;
+ } __attribute__((packed));
+@@ -266,9 +269,9 @@ get_dynamic_sa_offset_state_ptr_field(struct dynamic_sa_ctl *cts)
+ 	return sizeof(struct dynamic_sa_ctl) + offset * 4;
+ }
+ 
+-static inline u32 *get_dynamic_sa_key_field(struct dynamic_sa_ctl *cts)
++static inline __le32 *get_dynamic_sa_key_field(struct dynamic_sa_ctl *cts)
+ {
+-	return (u32 *) ((unsigned long)cts + sizeof(struct dynamic_sa_ctl));
++	return (__le32 *) ((unsigned long)cts + sizeof(struct dynamic_sa_ctl));
+ }
+ 
+ #endif
+-- 
+2.14.2
+
+From af6dc70c3254c839cf44b3fecff8b9396c6e0ee5 Mon Sep 17 00:00:00 2001
+From: Christian Lamparter <chunkeey@gmail.com>
+Date: Sun, 1 Oct 2017 14:45:41 +0200
+Subject: [PATCH 07/13] crypto: crypto4xx: overhaul crypto4xx_build_pd()
+
+This patch overhauls and fixes code related to crypto4xx_build_pd()
+
+ * crypto4xx_build_pd() did not handle chained source scatterlist.
+   This is fixed by replacing the buggy indexed-access of &src[idx]
+   with sg_next() in the gather array setup loop.
+
+ * The redundant is_hash, direction, save_iv and pd_ctl members
+   in the crypto4xx_ctx struct have been removed.
+    - is_hash can be derived from the crypto_async_request parameter.
+    - direction is already part of the security association's
+      bf.dir bitfield.
+    - save_iv is unused.
+    - pd_ctl always had the host_ready bit enabled anyway.
+      (the hash_final case is rather pointless, since the ahash
+       code has been deactivated).
+
+ * make crypto4xx_build_pd()'s caller responsible for converting
+   the IV to the LE32 format.
+
+ * change crypto4xx_ahash_update() and crypto4xx_ahash_digest() to
+   initialize a temporary destination scatterlist. This allows the
+   removal of an ugly cast of req->result (which is a pointer to an
+   u8-array) to a scatterlist pointer.
+
+ * change crypto4xx_build_pd() return type to int. After all
+   it returns -EINPROGRESS/-EBUSY.
+
+ * fix crypto4xx_build_pd() thread-unsafe sa handling.
+
+Signed-off-by: Christian Lamparter <chunkeey@gmail.com>
+---
+ drivers/crypto/amcc/crypto4xx_alg.c  |  87 +++++++++++-------------
+ drivers/crypto/amcc/crypto4xx_core.c | 128 ++++++++++++++++-------------------
+ drivers/crypto/amcc/crypto4xx_core.h |  12 ++--
+ 3 files changed, 103 insertions(+), 124 deletions(-)
+
+diff --git a/drivers/crypto/amcc/crypto4xx_alg.c b/drivers/crypto/amcc/crypto4xx_alg.c
+index 0e1d110a6405..195445310f0c 100644
+--- a/drivers/crypto/amcc/crypto4xx_alg.c
++++ b/drivers/crypto/amcc/crypto4xx_alg.c
+@@ -75,27 +75,29 @@ static void set_dynamic_sa_command_1(struct dynamic_sa_ctl *sa, u32 cm,
+ int crypto4xx_encrypt(struct ablkcipher_request *req)
+ {
+ 	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(req->base.tfm);
++	unsigned int ivlen = crypto_ablkcipher_ivsize(
++		crypto_ablkcipher_reqtfm(req));
++	__le32 iv[ivlen];
+ 
+-	ctx->direction = DIR_OUTBOUND;
+-	ctx->is_hash = 0;
+-	ctx->pd_ctl = 0x1;
++	if (ivlen)
++		crypto4xx_memcpy_to_le32(iv, req->info, ivlen);
+ 
+ 	return crypto4xx_build_pd(&req->base, ctx, req->src, req->dst,
+-		req->nbytes, req->info,
+-		crypto_ablkcipher_ivsize(crypto_ablkcipher_reqtfm(req)));
++		req->nbytes, iv, ivlen, ctx->sa_out, ctx->sa_len);
+ }
+ 
+ int crypto4xx_decrypt(struct ablkcipher_request *req)
+ {
+ 	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(req->base.tfm);
++	unsigned int ivlen = crypto_ablkcipher_ivsize(
++		crypto_ablkcipher_reqtfm(req));
++	__le32 iv[ivlen];
+ 
+-	ctx->direction = DIR_INBOUND;
+-	ctx->is_hash = 0;
+-	ctx->pd_ctl = 1;
++	if (ivlen)
++		crypto4xx_memcpy_to_le32(iv, req->info, ivlen);
+ 
+ 	return crypto4xx_build_pd(&req->base, ctx, req->src, req->dst,
+-		req->nbytes, req->info,
+-		crypto_ablkcipher_ivsize(crypto_ablkcipher_reqtfm(req)));
++		req->nbytes, iv, ivlen, ctx->sa_in, ctx->sa_len);
+ }
+ 
+ /**
+@@ -153,11 +155,6 @@ static int crypto4xx_setkey_aes(struct crypto_ablkcipher *cipher,
+ 				 key, keylen);
+ 	sa->sa_contents.w = SA_AES_CONTENTS | (keylen << 2);
+ 	sa->sa_command_1.bf.key_len = keylen >> 3;
+-	ctx->is_hash = 0;
+-	ctx->direction = DIR_INBOUND;
+-	memcpy(sa + get_dynamic_sa_offset_state_ptr_field(sa),
+-	       (void *)&ctx->state_record_dma_addr, 4);
+-	ctx->offset_to_sr_ptr = get_dynamic_sa_offset_state_ptr_field(sa);
+ 
+ 	memcpy(ctx->sa_out, ctx->sa_in, ctx->sa_len * 4);
+ 	sa = ctx->sa_out;
+@@ -206,7 +203,7 @@ int crypto4xx_setkey_rfc3686(struct crypto_ablkcipher *cipher,
+ 	if (rc)
+ 		return rc;
+ 
+-	memcpy(ctx->state_record,
++	crypto4xx_memcpy_to_le32(ctx->state_record->save_iv,
+ 		key + keylen - CTR_RFC3686_NONCE_SIZE, CTR_RFC3686_NONCE_SIZE);
+ 
+ 	return 0;
+@@ -215,27 +212,29 @@ int crypto4xx_setkey_rfc3686(struct crypto_ablkcipher *cipher,
+ int crypto4xx_rfc3686_encrypt(struct ablkcipher_request *req)
+ {
+ 	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(req->base.tfm);
+-	__be32 iv[AES_IV_SIZE / 4] = { *(u32 *)ctx->state_record,
+-		*(u32 *) req->info, *(u32 *) (req->info + 4), cpu_to_be32(1) };
+-
+-	ctx->direction = DIR_OUTBOUND;
+-	ctx->pd_ctl = 1;
++	__le32 iv[AES_IV_SIZE / 4] = {
++		ctx->state_record->save_iv[0],
++		cpu_to_le32p((u32 *) req->info),
++		cpu_to_le32p((u32 *) (req->info + 4)),
++		cpu_to_le32(1) };
+ 
+ 	return crypto4xx_build_pd(&req->base, ctx, req->src, req->dst,
+-				  req->nbytes, iv, AES_IV_SIZE);
++				  req->nbytes, iv, AES_IV_SIZE,
++				  ctx->sa_out, ctx->sa_len);
+ }
+ 
+ int crypto4xx_rfc3686_decrypt(struct ablkcipher_request *req)
+ {
+ 	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(req->base.tfm);
+-	__be32 iv[AES_IV_SIZE / 4] = { *(u32 *)ctx->state_record,
+-		*(u32 *) req->info, *(u32 *) (req->info + 4), cpu_to_be32(1) };
+-
+-	ctx->direction = DIR_INBOUND;
+-	ctx->pd_ctl = 1;
++	__le32 iv[AES_IV_SIZE / 4] = {
++		ctx->state_record->save_iv[0],
++		cpu_to_le32p((u32 *) req->info),
++		cpu_to_le32p((u32 *) (req->info + 4)),
++		cpu_to_le32(1) };
+ 
+ 	return crypto4xx_build_pd(&req->base, ctx, req->src, req->dst,
+-				  req->nbytes, iv, AES_IV_SIZE);
++				  req->nbytes, iv, AES_IV_SIZE,
++				  ctx->sa_out, ctx->sa_len);
+ }
+ 
+ /**
+@@ -253,7 +252,6 @@ static int crypto4xx_hash_alg_init(struct crypto_tfm *tfm,
+ 	int rc;
+ 
+ 	ctx->dev   = my_alg->dev;
+-	ctx->is_hash = 1;
+ 
+ 	/* Create SA */
+ 	if (ctx->sa_in_dma_addr || ctx->sa_out_dma_addr)
+@@ -284,13 +282,9 @@ static int crypto4xx_hash_alg_init(struct crypto_tfm *tfm,
+ 				 SA_SEQ_MASK_OFF, SA_MC_ENABLE,
+ 				 SA_NOT_COPY_PAD, SA_NOT_COPY_PAYLOAD,
+ 				 SA_NOT_COPY_HDR);
+-	ctx->direction = DIR_INBOUND;
+ 	/* Need to zero hash digest in SA */
+ 	memset(sa->inner_digest, 0, sizeof(sa->inner_digest));
+ 	memset(sa->outer_digest, 0, sizeof(sa->outer_digest));
+-	sa->state_ptr = ctx->state_record_dma_addr;
+-	ctx->offset_to_sr_ptr =
+-		get_dynamic_sa_offset_state_ptr_field(&sa->ctrl);
+ 
+ 	return 0;
+ }
+@@ -306,23 +300,22 @@ int crypto4xx_hash_init(struct ahash_request *req)
+ 			__crypto_ahash_cast(req->base.tfm));
+ 	sa->sa_command_0.bf.digest_len = ds >> 2;
+ 	sa->sa_command_0.bf.load_hash_state = SA_LOAD_HASH_FROM_SA;
+-	ctx->is_hash = 1;
+-	ctx->direction = DIR_INBOUND;
+ 
+ 	return 0;
+ }
+ 
+ int crypto4xx_hash_update(struct ahash_request *req)
+ {
++	struct crypto_ahash *ahash = crypto_ahash_reqtfm(req);
+ 	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(req->base.tfm);
++	struct scatterlist dst;
++	unsigned int ds = crypto_ahash_digestsize(ahash);
+ 
+-	ctx->is_hash = 1;
+-	ctx->pd_ctl = 0x11;
+-	ctx->direction = DIR_INBOUND;
++	sg_init_one(&dst, req->result, ds);
+ 
+-	return crypto4xx_build_pd(&req->base, ctx, req->src,
+-				  (struct scatterlist *) req->result,
+-				  req->nbytes, NULL, 0);
++	return crypto4xx_build_pd(&req->base, ctx, req->src, &dst,
++				  req->nbytes, NULL, 0, ctx->sa_in,
++				  ctx->sa_len);
+ }
+ 
+ int crypto4xx_hash_final(struct ahash_request *req)
+@@ -332,14 +325,16 @@ int crypto4xx_hash_final(struct ahash_request *req)
+ 
+ int crypto4xx_hash_digest(struct ahash_request *req)
+ {
++	struct crypto_ahash *ahash = crypto_ahash_reqtfm(req);
+ 	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(req->base.tfm);
++	struct scatterlist dst;
++	unsigned int ds = crypto_ahash_digestsize(ahash);
+ 
+-	ctx->pd_ctl = 0x11;
+-	ctx->direction = DIR_INBOUND;
++	sg_init_one(&dst, req->result, ds);
+ 
+-	return crypto4xx_build_pd(&req->base, ctx, req->src,
+-				  (struct scatterlist *) req->result,
+-				  req->nbytes, NULL, 0);
++	return crypto4xx_build_pd(&req->base, ctx, req->src, &dst,
++				  req->nbytes, NULL, 0, ctx->sa_in,
++				  ctx->sa_len);
+ }
+ 
+ /**
+diff --git a/drivers/crypto/amcc/crypto4xx_core.c b/drivers/crypto/amcc/crypto4xx_core.c
+index c936d68f19ad..254dc61c91a6 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.c
++++ b/drivers/crypto/amcc/crypto4xx_core.c
+@@ -194,7 +194,6 @@ void crypto4xx_free_state_record(struct crypto4xx_ctx *ctx)
+ static u32 crypto4xx_build_pdr(struct crypto4xx_device *dev)
+ {
+ 	int i;
+-	struct pd_uinfo *pd_uinfo;
+ 	dev->pdr = dma_alloc_coherent(dev->core_dev->device,
+ 				      sizeof(struct ce_pd) * PPC4XX_NUM_PD,
+ 				      &dev->pdr_pa, GFP_ATOMIC);
+@@ -224,11 +223,14 @@ static u32 crypto4xx_build_pdr(struct crypto4xx_device *dev)
+ 	if (!dev->shadow_sr_pool)
+ 		return -ENOMEM;
+ 	for (i = 0; i < PPC4XX_NUM_PD; i++) {
+-		pd_uinfo = &dev->pdr_uinfo[i];
++		struct ce_pd *pd = &dev->pdr[i];
++		struct pd_uinfo *pd_uinfo = &dev->pdr_uinfo[i];
++
++		pd->sa = dev->shadow_sa_pool_pa +
++			sizeof(union shadow_sa_buf) * i;
+ 
+ 		/* alloc 256 bytes which is enough for any kind of dynamic sa */
+ 		pd_uinfo->sa_va = &dev->shadow_sa_pool[i].sa;
+-		pd_uinfo->sa_pa = dev->shadow_sa_pool_pa + 256 * i;
+ 
+ 		/* alloc state record */
+ 		pd_uinfo->sr_va = &dev->shadow_sr_pool[i];
+@@ -291,14 +293,6 @@ static u32 crypto4xx_put_pd_to_pdr(struct crypto4xx_device *dev, u32 idx)
+ 	return 0;
+ }
+ 
+-static struct ce_pd *crypto4xx_get_pdp(struct crypto4xx_device *dev,
+-				       dma_addr_t *pd_dma, u32 idx)
+-{
+-	*pd_dma = dev->pdr_pa + sizeof(struct ce_pd) * idx;
+-
+-	return &dev->pdr[idx];
+-}
+-
+ /**
+  * alloc memory for the gather ring
+  * no need to alloc buf for the ring
+@@ -520,18 +514,16 @@ static void crypto4xx_copy_pkt_to_dst(struct crypto4xx_device *dev,
+ 	}
+ }
+ 
+-static u32 crypto4xx_copy_digest_to_dst(struct pd_uinfo *pd_uinfo,
++static void crypto4xx_copy_digest_to_dst(void *dst,
++					struct pd_uinfo *pd_uinfo,
+ 					struct crypto4xx_ctx *ctx)
+ {
+ 	struct dynamic_sa_ctl *sa = (struct dynamic_sa_ctl *) ctx->sa_in;
+ 
+ 	if (sa->sa_command_0.bf.hash_alg == SA_HASH_ALG_SHA1) {
+-		memcpy((void *) pd_uinfo->dest_va,
+-		       pd_uinfo->sr_va->save_digest,
++		memcpy(dst, pd_uinfo->sr_va->save_digest,
+ 		       SA_HASH_ALG_SHA1_DIGEST_SIZE);
+ 	}
+-
+-	return 0;
+ }
+ 
+ static void crypto4xx_ret_sg_desc(struct crypto4xx_device *dev,
+@@ -591,7 +583,7 @@ static u32 crypto4xx_ahash_done(struct crypto4xx_device *dev,
+ 	ahash_req = ahash_request_cast(pd_uinfo->async_req);
+ 	ctx  = crypto_tfm_ctx(ahash_req->base.tfm);
+ 
+-	crypto4xx_copy_digest_to_dst(pd_uinfo,
++	crypto4xx_copy_digest_to_dst(ahash_req->result, pd_uinfo,
+ 				     crypto_tfm_ctx(ahash_req->base.tfm));
+ 	crypto4xx_ret_sg_desc(dev, pd_uinfo);
+ 
+@@ -651,17 +643,17 @@ static u32 get_next_sd(u32 current)
+ 		return 0;
+ }
+ 
+-u32 crypto4xx_build_pd(struct crypto_async_request *req,
++int crypto4xx_build_pd(struct crypto_async_request *req,
+ 		       struct crypto4xx_ctx *ctx,
+ 		       struct scatterlist *src,
+ 		       struct scatterlist *dst,
+-		       unsigned int datalen,
+-		       void *iv, u32 iv_len)
++		       const unsigned int datalen,
++		       const __le32 *iv, const u32 iv_len,
++		       const struct dynamic_sa_ctl *req_sa,
++		       const unsigned int sa_len)
+ {
+ 	struct crypto4xx_device *dev = ctx->dev;
+-	dma_addr_t addr, pd_dma, sd_dma, gd_dma;
+ 	struct dynamic_sa_ctl *sa;
+-	struct scatterlist *sg;
+ 	struct ce_gd *gd;
+ 	struct ce_pd *pd;
+ 	u32 num_gd, num_sd;
+@@ -669,8 +661,9 @@ u32 crypto4xx_build_pd(struct crypto_async_request *req,
+ 	u32 fst_sd = 0xffffffff;
+ 	u32 pd_entry;
+ 	unsigned long flags;
+-	struct pd_uinfo *pd_uinfo = NULL;
+-	unsigned int nbytes = datalen, idx;
++	struct pd_uinfo *pd_uinfo;
++	unsigned int nbytes = datalen;
++	size_t offset_to_sr_ptr;
+ 	u32 gd_idx = 0;
+ 	bool is_busy;
+ 
+@@ -684,7 +677,7 @@ u32 crypto4xx_build_pd(struct crypto_async_request *req,
+ 		num_gd = 0;
+ 
+ 	/* figure how many sd is needed */
+-	if (sg_is_last(dst) || ctx->is_hash) {
++	if (sg_is_last(dst)) {
+ 		num_sd = 0;
+ 	} else {
+ 		if (datalen > PPC4XX_SD_BUFFER_SIZE) {
+@@ -755,37 +748,27 @@ u32 crypto4xx_build_pd(struct crypto_async_request *req,
+ 	}
+ 	spin_unlock_irqrestore(&dev->core_dev->lock, flags);
+ 
++	pd = &dev->pdr[pd_entry];
++	pd->sa_len = sa_len;
++
+ 	pd_uinfo = &dev->pdr_uinfo[pd_entry];
+-	pd = crypto4xx_get_pdp(dev, &pd_dma, pd_entry);
+ 	pd_uinfo->async_req = req;
+ 	pd_uinfo->num_gd = num_gd;
+ 	pd_uinfo->num_sd = num_sd;
+ 
+-	if (iv_len || ctx->is_hash) {
+-		pd->sa = pd_uinfo->sa_pa;
+-		sa = pd_uinfo->sa_va;
+-		if (ctx->direction == DIR_INBOUND)
+-			memcpy(sa, ctx->sa_in, ctx->sa_len * 4);
+-		else
+-			memcpy(sa, ctx->sa_out, ctx->sa_len * 4);
++	if (iv_len)
++		memcpy(pd_uinfo->sr_va->save_iv, iv, iv_len);
+ 
+-		memcpy((void *) sa + ctx->offset_to_sr_ptr,
+-			&pd_uinfo->sr_pa, 4);
++	sa = pd_uinfo->sa_va;
++	memcpy(sa, req_sa, sa_len * 4);
++
++	offset_to_sr_ptr = get_dynamic_sa_offset_state_ptr_field(sa);
++	*(u32 *)((unsigned long)sa + offset_to_sr_ptr) = pd_uinfo->sr_pa;
+ 
+-		if (iv_len)
+-			crypto4xx_memcpy_to_le32(pd_uinfo->sr_va->save_iv,
+-						 iv, iv_len);
+-	} else {
+-		if (ctx->direction == DIR_INBOUND) {
+-			pd->sa = ctx->sa_in_dma_addr;
+-			sa = ctx->sa_in;
+-		} else {
+-			pd->sa = ctx->sa_out_dma_addr;
+-			sa = ctx->sa_out;
+-		}
+-	}
+-	pd->sa_len = ctx->sa_len;
+ 	if (num_gd) {
++		dma_addr_t gd_dma;
++		struct scatterlist *sg;
++
+ 		/* get first gd we are going to use */
+ 		gd_idx = fst_gd;
+ 		pd_uinfo->first_gd = fst_gd;
+@@ -794,27 +777,30 @@ u32 crypto4xx_build_pd(struct crypto_async_request *req,
+ 		pd->src = gd_dma;
+ 		/* enable gather */
+ 		sa->sa_command_0.bf.gather = 1;
+-		idx = 0;
+-		src = &src[0];
+ 		/* walk the sg, and setup gather array */
++
++		sg = src;
+ 		while (nbytes) {
+-			sg = &src[idx];
+-			addr = dma_map_page(dev->core_dev->device, sg_page(sg),
+-				    sg->offset, sg->length, DMA_TO_DEVICE);
+-			gd->ptr = addr;
+-			gd->ctl_len.len = sg->length;
++			size_t len;
++
++			len = min(sg->length, nbytes);
++			gd->ptr = dma_map_page(dev->core_dev->device,
++				sg_page(sg), sg->offset, len, DMA_TO_DEVICE);
++			gd->ctl_len.len = len;
+ 			gd->ctl_len.done = 0;
+ 			gd->ctl_len.ready = 1;
+-			if (sg->length >= nbytes)
++			if (len >= nbytes)
+ 				break;
++
+ 			nbytes -= sg->length;
+ 			gd_idx = get_next_gd(gd_idx);
+ 			gd = crypto4xx_get_gdp(dev, &gd_dma, gd_idx);
+-			idx++;
++			sg = sg_next(sg);
+ 		}
+ 	} else {
+ 		pd->src = (u32)dma_map_page(dev->core_dev->device, sg_page(src),
+-				src->offset, src->length, DMA_TO_DEVICE);
++				src->offset, min(nbytes, src->length),
++				DMA_TO_DEVICE);
+ 		/*
+ 		 * Disable gather in sa command
+ 		 */
+@@ -825,25 +811,24 @@ u32 crypto4xx_build_pd(struct crypto_async_request *req,
+ 		pd_uinfo->first_gd = 0xffffffff;
+ 		pd_uinfo->num_gd = 0;
+ 	}
+-	if (ctx->is_hash || sg_is_last(dst)) {
++	if (sg_is_last(dst)) {
+ 		/*
+ 		 * we know application give us dst a whole piece of memory
+ 		 * no need to use scatter ring.
+-		 * In case of is_hash, the icv is always at end of src data.
+ 		 */
+ 		pd_uinfo->using_sd = 0;
+ 		pd_uinfo->first_sd = 0xffffffff;
+ 		pd_uinfo->num_sd = 0;
+ 		pd_uinfo->dest_va = dst;
+ 		sa->sa_command_0.bf.scatter = 0;
+-		if (ctx->is_hash)
+-			pd->dest = virt_to_phys((void *)dst);
+-		else
+-			pd->dest = (u32)dma_map_page(dev->core_dev->device,
+-					sg_page(dst), dst->offset,
+-					dst->length, DMA_TO_DEVICE);
++		pd->dest = (u32)dma_map_page(dev->core_dev->device,
++					     sg_page(dst), dst->offset,
++					     min(datalen, dst->length),
++					     DMA_TO_DEVICE);
+ 	} else {
++		dma_addr_t sd_dma;
+ 		struct ce_sd *sd = NULL;
++
+ 		u32 sd_idx = fst_sd;
+ 		nbytes = datalen;
+ 		sa->sa_command_0.bf.scatter = 1;
+@@ -857,7 +842,6 @@ u32 crypto4xx_build_pd(struct crypto_async_request *req,
+ 		sd->ctl.done = 0;
+ 		sd->ctl.rdy = 1;
+ 		/* sd->ptr should be setup by sd_init routine*/
+-		idx = 0;
+ 		if (nbytes >= PPC4XX_SD_BUFFER_SIZE)
+ 			nbytes -= PPC4XX_SD_BUFFER_SIZE;
+ 		else
+@@ -868,19 +852,23 @@ u32 crypto4xx_build_pd(struct crypto_async_request *req,
+ 			/* setup scatter descriptor */
+ 			sd->ctl.done = 0;
+ 			sd->ctl.rdy = 1;
+-			if (nbytes >= PPC4XX_SD_BUFFER_SIZE)
++			if (nbytes >= PPC4XX_SD_BUFFER_SIZE) {
+ 				nbytes -= PPC4XX_SD_BUFFER_SIZE;
+-			else
++			} else {
+ 				/*
+ 				 * SD entry can hold PPC4XX_SD_BUFFER_SIZE,
+ 				 * which is more than nbytes, so done.
+ 				 */
+ 				nbytes = 0;
++			}
+ 		}
+ 	}
+ 
+ 	sa->sa_command_1.bf.hash_crypto_offset = 0;
+-	pd->pd_ctl.w = ctx->pd_ctl;
++	pd->pd_ctl.w = 0;
++	pd->pd_ctl.bf.hash_final =
++		(crypto_tfm_alg_type(req->tfm) == CRYPTO_ALG_TYPE_AHASH);
++	pd->pd_ctl.bf.host_ready = 1;
+ 	pd->pd_ctl_len.w = 0x00400000 | datalen;
+ 	pd_uinfo->state = PD_ENTRY_INUSE | (is_busy ? PD_ENTRY_BUSY : 0);
+ 
+diff --git a/drivers/crypto/amcc/crypto4xx_core.h b/drivers/crypto/amcc/crypto4xx_core.h
+index 2df6874edee1..b1d634b0f44f 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.h
++++ b/drivers/crypto/amcc/crypto4xx_core.h
+@@ -71,7 +71,6 @@ struct pd_uinfo {
+ 	u32 num_sd;		/* number of scatter discriptors
+ 				used by this packet */
+ 	struct dynamic_sa_ctl *sa_va;	/* shadow sa */
+-	u32 sa_pa;
+ 	struct sa_state_record *sr_va;	/* state record for shadow sa */
+ 	u32 sr_pa;
+ 	struct scatterlist *dest_va;
+@@ -129,11 +128,6 @@ struct crypto4xx_ctx {
+ 	struct sa_state_record *state_record;
+ 	dma_addr_t state_record_dma_addr;
+ 	u32 sa_len;
+-	u32 offset_to_sr_ptr;           /* offset to state ptr, in dynamic sa */
+-	u32 direction;
+-	u32 save_iv;
+-	u32 pd_ctl;
+-	u32 is_hash;
+ };
+ 
+ struct crypto4xx_alg_common {
+@@ -170,8 +164,10 @@ int crypto4xx_build_pd(struct crypto_async_request *req,
+ 		       struct crypto4xx_ctx *ctx,
+ 		       struct scatterlist *src,
+ 		       struct scatterlist *dst,
+-		       unsigned int datalen,
+-		       void *iv, u32 iv_len);
++		       const unsigned int datalen,
++		       const __le32 *iv, const u32 iv_len,
++		       const struct dynamic_sa_ctl *sa,
++		       const unsigned int sa_len);
+ int crypto4xx_setkey_aes_cbc(struct crypto_ablkcipher *cipher,
+ 			     const u8 *key, unsigned int keylen);
+ int crypto4xx_setkey_aes_cfb(struct crypto_ablkcipher *cipher,
+-- 
+2.14.2
+
+From 65233af33b900a33ca0796cf92a8ec7107b9bbae Mon Sep 17 00:00:00 2001
+From: Christian Lamparter <chunkeey@gmail.com>
+Date: Sun, 1 Oct 2017 15:13:37 +0200
+Subject: [PATCH 08/13] crypto: crypto4xx: fix various warnings
+
+crypto4xx_core.c:179:6: warning: symbol 'crypto4xx_free_state_record'
+	was not declared. Should it be static?
+crypto4xx_core.c:331:5: warning: symbol 'crypto4xx_get_n_gd'
+	was not declared. Should it be static?
+crypto4xx_core.c:652:6: warning: symbol 'crypto4xx_return_pd'
+	was not declared. Should it be static?
+crypto4xx_core.c:944:5: warning: symbol 'crypto4xx_register_alg'
+	was not declared. Should it be static?
+
+crypto4xx_return_pd() is not used by anything. Therefore it is removed.
+
+Signed-off-by: Christian Lamparter <chunkeey@gmail.com>
+---
+ drivers/crypto/amcc/crypto4xx_core.c | 16 +++-------------
+ 1 file changed, 3 insertions(+), 13 deletions(-)
+
+diff --git a/drivers/crypto/amcc/crypto4xx_core.c b/drivers/crypto/amcc/crypto4xx_core.c
+index 254dc61c91a6..1752ea2125db 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.c
++++ b/drivers/crypto/amcc/crypto4xx_core.c
+@@ -176,7 +176,7 @@ u32 crypto4xx_alloc_state_record(struct crypto4xx_ctx *ctx)
+ 	return 0;
+ }
+ 
+-void crypto4xx_free_state_record(struct crypto4xx_ctx *ctx)
++static void crypto4xx_free_state_record(struct crypto4xx_ctx *ctx)
+ {
+ 	if (ctx->state_record != NULL)
+ 		dma_free_coherent(ctx->dev->core_dev->device,
+@@ -322,10 +322,11 @@ static inline void crypto4xx_destroy_gdr(struct crypto4xx_device *dev)
+  * when this function is called.
+  * preemption or interrupt must be disabled
+  */
+-u32 crypto4xx_get_n_gd(struct crypto4xx_device *dev, int n)
++static u32 crypto4xx_get_n_gd(struct crypto4xx_device *dev, int n)
+ {
+ 	u32 retval;
+ 	u32 tmp;
++
+ 	if (n >= PPC4XX_NUM_GD)
+ 		return ERING_WAS_FULL;
+ 
+@@ -616,17 +617,6 @@ static void crypto4xx_stop_all(struct crypto4xx_core_device *core_dev)
+ 	kfree(core_dev);
+ }
+ 
+-void crypto4xx_return_pd(struct crypto4xx_device *dev,
+-			 u32 pd_entry, struct ce_pd *pd,
+-			 struct pd_uinfo *pd_uinfo)
+-{
+-	/* irq should be already disabled */
+-	dev->pdr_head = pd_entry;
+-	pd->pd_ctl.w = 0;
+-	pd->pd_ctl_len.w = 0;
+-	pd_uinfo->state = PD_ENTRY_FREE;
+-}
+-
+ static u32 get_next_gd(u32 current)
+ {
+ 	if (current != PPC4XX_LAST_GD)
+-- 
+2.14.2
+
+From a6614abc7e42b025ee6050a10a1110961455c2fa Mon Sep 17 00:00:00 2001
+From: Christian Lamparter <chunkeey@gmail.com>
+Date: Mon, 2 Oct 2017 14:49:30 +0200
+Subject: [PATCH 09/13] crypto: crypto4xx: fix indefinite stalls under heavy
+ load
+
+If the crypto4xx device is continuously loaded by dm-crypt
+and ipsec work, it will start to work intermittent after a
+few (between 20-30) seconds, hurting throughput and latency.
+
+This patch contains various stability improvements in order
+to fix this issue. So far, the hardware has survived more
+than a day without suffering any stalls under the continuous
+load.
+
+Signed-off-by: Christian Lamparter <chunkeey@gmail.com>
+---
+ drivers/crypto/amcc/crypto4xx_core.c    | 33 ++++++++++++++++++---------------
+ drivers/crypto/amcc/crypto4xx_reg_def.h |  3 +++
+ 2 files changed, 21 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/crypto/amcc/crypto4xx_core.c b/drivers/crypto/amcc/crypto4xx_core.c
+index 1752ea2125db..de9044201a23 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.c
++++ b/drivers/crypto/amcc/crypto4xx_core.c
+@@ -280,17 +280,20 @@ static u32 crypto4xx_get_pd_from_pdr_nolock(struct crypto4xx_device *dev)
+ static u32 crypto4xx_put_pd_to_pdr(struct crypto4xx_device *dev, u32 idx)
+ {
+ 	struct pd_uinfo *pd_uinfo = &dev->pdr_uinfo[idx];
++	u32 tail;
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&dev->core_dev->lock, flags);
++	pd_uinfo->state = PD_ENTRY_FREE;
++
+ 	if (dev->pdr_tail != PPC4XX_LAST_PD)
+ 		dev->pdr_tail++;
+ 	else
+ 		dev->pdr_tail = 0;
+-	pd_uinfo->state = PD_ENTRY_FREE;
++	tail = dev->pdr_tail;
+ 	spin_unlock_irqrestore(&dev->core_dev->lock, flags);
+ 
+-	return 0;
++	return tail;
+ }
+ 
+ /**
+@@ -854,16 +857,16 @@ int crypto4xx_build_pd(struct crypto_async_request *req,
+ 		}
+ 	}
+ 
+-	sa->sa_command_1.bf.hash_crypto_offset = 0;
+-	pd->pd_ctl.w = 0;
+-	pd->pd_ctl.bf.hash_final =
+-		(crypto_tfm_alg_type(req->tfm) == CRYPTO_ALG_TYPE_AHASH);
+-	pd->pd_ctl.bf.host_ready = 1;
++	pd->pd_ctl.w = PD_CTL_HOST_READY |
++		((crypto_tfm_alg_type(req->tfm) == CRYPTO_ALG_TYPE_AHASH) |
++		 (crypto_tfm_alg_type(req->tfm) == CRYPTO_ALG_TYPE_AEAD) ?
++			PD_CTL_HASH_FINAL : 0);
+ 	pd->pd_ctl_len.w = 0x00400000 | datalen;
+ 	pd_uinfo->state = PD_ENTRY_INUSE | (is_busy ? PD_ENTRY_BUSY : 0);
+ 
+ 	wmb();
+ 	/* write any value to push engine to read a pd */
++	writel(0, dev->ce_base + CRYPTO4XX_INT_DESCR_RD);
+ 	writel(1, dev->ce_base + CRYPTO4XX_INT_DESCR_RD);
+ 	return is_busy ? -EBUSY : -EINPROGRESS;
+ }
+@@ -964,23 +967,23 @@ static void crypto4xx_bh_tasklet_cb(unsigned long data)
+ 	struct crypto4xx_core_device *core_dev = dev_get_drvdata(dev);
+ 	struct pd_uinfo *pd_uinfo;
+ 	struct ce_pd *pd;
+-	u32 tail;
++	u32 tail = core_dev->dev->pdr_tail;
++	u32 head = core_dev->dev->pdr_head;
+ 
+-	while (core_dev->dev->pdr_head != core_dev->dev->pdr_tail) {
+-		tail = core_dev->dev->pdr_tail;
++	do {
+ 		pd_uinfo = &core_dev->dev->pdr_uinfo[tail];
+ 		pd = &core_dev->dev->pdr[tail];
+ 		if ((pd_uinfo->state & PD_ENTRY_INUSE) &&
+-				   pd->pd_ctl.bf.pe_done &&
+-				   !pd->pd_ctl.bf.host_ready) {
+-			pd->pd_ctl.bf.pe_done = 0;
++		     ((READ_ONCE(pd->pd_ctl.w) &
++		       (PD_CTL_PE_DONE | PD_CTL_HOST_READY)) ==
++		       PD_CTL_PE_DONE)) {
+ 			crypto4xx_pd_done(core_dev->dev, tail);
+-			crypto4xx_put_pd_to_pdr(core_dev->dev, tail);
++			tail = crypto4xx_put_pd_to_pdr(core_dev->dev, tail);
+ 		} else {
+ 			/* if tail not done, break */
+ 			break;
+ 		}
+-	}
++	} while (head != tail);
+ }
+ 
+ /**
+diff --git a/drivers/crypto/amcc/crypto4xx_reg_def.h b/drivers/crypto/amcc/crypto4xx_reg_def.h
+index 279b8725559f..0a22ec5d1a96 100644
+--- a/drivers/crypto/amcc/crypto4xx_reg_def.h
++++ b/drivers/crypto/amcc/crypto4xx_reg_def.h
+@@ -261,6 +261,9 @@ union ce_pd_ctl {
+ 	} bf;
+ 	u32 w;
+ } __attribute__((packed));
++#define PD_CTL_HASH_FINAL	BIT(4)
++#define PD_CTL_PE_DONE		BIT(1)
++#define PD_CTL_HOST_READY	BIT(0)
+ 
+ union ce_pd_ctl_len {
+ 	struct {
+-- 
+2.14.2
+
+From 6a5a2518ef14e783e87963ab783b7fd12f775661 Mon Sep 17 00:00:00 2001
+From: Christian Lamparter <chunkeey@gmail.com>
+Date: Tue, 3 Oct 2017 23:37:40 +0200
+Subject: [PATCH 10/13] crypto: crypto4xx: simplify sa and state context
+ acquisition
+
+Thanks to the big overhaul of crypto4xx_build_pd(), the request-local
+sa_in, sa_out and state_record allocation can be simplified.
+
+There's no need to setup any dma coherent memory anymore and
+much of the support code can be removed.
+
+Signed-off-by: Christian Lamparter <chunkeey@gmail.com>
+---
+ drivers/crypto/amcc/crypto4xx_alg.c  | 27 +++++--------------
+ drivers/crypto/amcc/crypto4xx_core.c | 50 ++++++------------------------------
+ drivers/crypto/amcc/crypto4xx_core.h |  6 +----
+ 3 files changed, 15 insertions(+), 68 deletions(-)
+
+diff --git a/drivers/crypto/amcc/crypto4xx_alg.c b/drivers/crypto/amcc/crypto4xx_alg.c
+index 195445310f0c..22875ec2b2c8 100644
+--- a/drivers/crypto/amcc/crypto4xx_alg.c
++++ b/drivers/crypto/amcc/crypto4xx_alg.c
+@@ -122,20 +122,13 @@ static int crypto4xx_setkey_aes(struct crypto_ablkcipher *cipher,
+ 	}
+ 
+ 	/* Create SA */
+-	if (ctx->sa_in_dma_addr || ctx->sa_out_dma_addr)
++	if (ctx->sa_in || ctx->sa_out)
+ 		crypto4xx_free_sa(ctx);
+ 
+ 	rc = crypto4xx_alloc_sa(ctx, SA_AES128_LEN + (keylen-16) / 4);
+ 	if (rc)
+ 		return rc;
+ 
+-	if (ctx->state_record_dma_addr == 0) {
+-		rc = crypto4xx_alloc_state_record(ctx);
+-		if (rc) {
+-			crypto4xx_free_sa(ctx);
+-			return rc;
+-		}
+-	}
+ 	/* Setup SA */
+ 	sa = ctx->sa_in;
+ 
+@@ -203,8 +196,8 @@ int crypto4xx_setkey_rfc3686(struct crypto_ablkcipher *cipher,
+ 	if (rc)
+ 		return rc;
+ 
+-	crypto4xx_memcpy_to_le32(ctx->state_record->save_iv,
+-		key + keylen - CTR_RFC3686_NONCE_SIZE, CTR_RFC3686_NONCE_SIZE);
++	ctx->iv_nonce = cpu_to_le32p((u32 *)&key[keylen -
++						 CTR_RFC3686_NONCE_SIZE]);
+ 
+ 	return 0;
+ }
+@@ -213,7 +206,7 @@ int crypto4xx_rfc3686_encrypt(struct ablkcipher_request *req)
+ {
+ 	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(req->base.tfm);
+ 	__le32 iv[AES_IV_SIZE / 4] = {
+-		ctx->state_record->save_iv[0],
++		ctx->iv_nonce,
+ 		cpu_to_le32p((u32 *) req->info),
+ 		cpu_to_le32p((u32 *) (req->info + 4)),
+ 		cpu_to_le32(1) };
+@@ -227,7 +220,7 @@ int crypto4xx_rfc3686_decrypt(struct ablkcipher_request *req)
+ {
+ 	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(req->base.tfm);
+ 	__le32 iv[AES_IV_SIZE / 4] = {
+-		ctx->state_record->save_iv[0],
++		ctx->iv_nonce,
+ 		cpu_to_le32p((u32 *) req->info),
+ 		cpu_to_le32p((u32 *) (req->info + 4)),
+ 		cpu_to_le32(1) };
+@@ -254,21 +247,13 @@ static int crypto4xx_hash_alg_init(struct crypto_tfm *tfm,
+ 	ctx->dev   = my_alg->dev;
+ 
+ 	/* Create SA */
+-	if (ctx->sa_in_dma_addr || ctx->sa_out_dma_addr)
++	if (ctx->sa_in || ctx->sa_out)
+ 		crypto4xx_free_sa(ctx);
+ 
+ 	rc = crypto4xx_alloc_sa(ctx, sa_len);
+ 	if (rc)
+ 		return rc;
+ 
+-	if (ctx->state_record_dma_addr == 0) {
+-		crypto4xx_alloc_state_record(ctx);
+-		if (!ctx->state_record_dma_addr) {
+-			crypto4xx_free_sa(ctx);
+-			return -ENOMEM;
+-		}
+-	}
+-
+ 	crypto_ahash_set_reqsize(__crypto_ahash_cast(tfm),
+ 				 sizeof(struct crypto4xx_ctx));
+ 	sa = (struct dynamic_sa_hash160 *)ctx->sa_in;
+diff --git a/drivers/crypto/amcc/crypto4xx_core.c b/drivers/crypto/amcc/crypto4xx_core.c
+index de9044201a23..55a4dd8984c7 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.c
++++ b/drivers/crypto/amcc/crypto4xx_core.c
+@@ -130,21 +130,17 @@ static void crypto4xx_hw_init(struct crypto4xx_device *dev)
+ 
+ int crypto4xx_alloc_sa(struct crypto4xx_ctx *ctx, u32 size)
+ {
+-	ctx->sa_in = dma_alloc_coherent(ctx->dev->core_dev->device, size * 4,
+-					&ctx->sa_in_dma_addr, GFP_ATOMIC);
++	ctx->sa_in = kzalloc(size * 4, GFP_ATOMIC);
+ 	if (ctx->sa_in == NULL)
+ 		return -ENOMEM;
+ 
+-	ctx->sa_out = dma_alloc_coherent(ctx->dev->core_dev->device, size * 4,
+-					 &ctx->sa_out_dma_addr, GFP_ATOMIC);
++	ctx->sa_out = kzalloc(size * 4, GFP_ATOMIC);
+ 	if (ctx->sa_out == NULL) {
+-		dma_free_coherent(ctx->dev->core_dev->device, size * 4,
+-				  ctx->sa_in, ctx->sa_in_dma_addr);
++		kfree(ctx->sa_in);
++		ctx->sa_in = NULL;
+ 		return -ENOMEM;
+ 	}
+ 
+-	memset(ctx->sa_in, 0, size * 4);
+-	memset(ctx->sa_out, 0, size * 4);
+ 	ctx->sa_len = size;
+ 
+ 	return 0;
+@@ -152,40 +148,13 @@ int crypto4xx_alloc_sa(struct crypto4xx_ctx *ctx, u32 size)
+ 
+ void crypto4xx_free_sa(struct crypto4xx_ctx *ctx)
+ {
+-	if (ctx->sa_in != NULL)
+-		dma_free_coherent(ctx->dev->core_dev->device, ctx->sa_len * 4,
+-				  ctx->sa_in, ctx->sa_in_dma_addr);
+-	if (ctx->sa_out != NULL)
+-		dma_free_coherent(ctx->dev->core_dev->device, ctx->sa_len * 4,
+-				  ctx->sa_out, ctx->sa_out_dma_addr);
+-
+-	ctx->sa_in_dma_addr = 0;
+-	ctx->sa_out_dma_addr = 0;
++	kfree(ctx->sa_in);
++	ctx->sa_in = NULL;
++	kfree(ctx->sa_out);
++	ctx->sa_out = NULL;
+ 	ctx->sa_len = 0;
+ }
+ 
+-u32 crypto4xx_alloc_state_record(struct crypto4xx_ctx *ctx)
+-{
+-	ctx->state_record = dma_alloc_coherent(ctx->dev->core_dev->device,
+-				sizeof(struct sa_state_record),
+-				&ctx->state_record_dma_addr, GFP_ATOMIC);
+-	if (!ctx->state_record_dma_addr)
+-		return -ENOMEM;
+-	memset(ctx->state_record, 0, sizeof(struct sa_state_record));
+-
+-	return 0;
+-}
+-
+-static void crypto4xx_free_state_record(struct crypto4xx_ctx *ctx)
+-{
+-	if (ctx->state_record != NULL)
+-		dma_free_coherent(ctx->dev->core_dev->device,
+-				  sizeof(struct sa_state_record),
+-				  ctx->state_record,
+-				  ctx->state_record_dma_addr);
+-	ctx->state_record_dma_addr = 0;
+-}
+-
+ /**
+  * alloc memory for the gather ring
+  * no need to alloc buf for the ring
+@@ -883,8 +852,6 @@ static int crypto4xx_alg_init(struct crypto_tfm *tfm)
+ 	ctx->dev = amcc_alg->dev;
+ 	ctx->sa_in = NULL;
+ 	ctx->sa_out = NULL;
+-	ctx->sa_in_dma_addr = 0;
+-	ctx->sa_out_dma_addr = 0;
+ 	ctx->sa_len = 0;
+ 
+ 	switch (alg->cra_flags & CRYPTO_ALG_TYPE_MASK) {
+@@ -905,7 +872,6 @@ static void crypto4xx_alg_exit(struct crypto_tfm *tfm)
+ 	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(tfm);
+ 
+ 	crypto4xx_free_sa(ctx);
+-	crypto4xx_free_state_record(ctx);
+ }
+ 
+ int crypto4xx_register_alg(struct crypto4xx_device *sec_dev,
+diff --git a/drivers/crypto/amcc/crypto4xx_core.h b/drivers/crypto/amcc/crypto4xx_core.h
+index b1d634b0f44f..650aa94cc4b8 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.h
++++ b/drivers/crypto/amcc/crypto4xx_core.h
+@@ -122,11 +122,8 @@ struct crypto4xx_core_device {
+ struct crypto4xx_ctx {
+ 	struct crypto4xx_device *dev;
+ 	struct dynamic_sa_ctl *sa_in;
+-	dma_addr_t sa_in_dma_addr;
+ 	struct dynamic_sa_ctl *sa_out;
+-	dma_addr_t sa_out_dma_addr;
+-	struct sa_state_record *state_record;
+-	dma_addr_t state_record_dma_addr;
++	__le32 iv_nonce;
+ 	u32 sa_len;
+ };
+ 
+@@ -159,7 +156,6 @@ static inline struct crypto4xx_alg *crypto_alg_to_crypto4xx_alg(
+ int crypto4xx_alloc_sa(struct crypto4xx_ctx *ctx, u32 size);
+ void crypto4xx_free_sa(struct crypto4xx_ctx *ctx);
+ void crypto4xx_free_ctx(struct crypto4xx_ctx *ctx);
+-u32 crypto4xx_alloc_state_record(struct crypto4xx_ctx *ctx);
+ int crypto4xx_build_pd(struct crypto_async_request *req,
+ 		       struct crypto4xx_ctx *ctx,
+ 		       struct scatterlist *src,
+-- 
+2.14.2
+
+From 556a1252625ae7559dee5ebfd2338bbed1d679da Mon Sep 17 00:00:00 2001
+From: Christian Lamparter <chunkeey@gmail.com>
+Date: Sun, 1 Oct 2017 15:01:29 +0200
+Subject: [PATCH 11/13] crypto: crypto4xx: prepare for AEAD support
+
+This patch enhances existing interfaces and
+functions to support AEAD ciphers in the next
+patches.
+
+Signed-off-by: Christian Lamparter <chunkeey@gmail.com>
+---
+ drivers/crypto/Kconfig               |   4 +
+ drivers/crypto/amcc/crypto4xx_alg.c  |  19 +--
+ drivers/crypto/amcc/crypto4xx_core.c | 217 +++++++++++++++++++++++++++--------
+ drivers/crypto/amcc/crypto4xx_core.h |  22 ++--
+ drivers/crypto/amcc/crypto4xx_sa.h   |  41 +++++++
+ 5 files changed, 230 insertions(+), 73 deletions(-)
+
+diff --git a/drivers/crypto/Kconfig b/drivers/crypto/Kconfig
+index fe33c199fc1a..de825b354fdf 100644
+--- a/drivers/crypto/Kconfig
++++ b/drivers/crypto/Kconfig
+@@ -315,6 +315,10 @@ config CRYPTO_DEV_PPC4XX
+ 	tristate "Driver AMCC PPC4xx crypto accelerator"
+ 	depends on PPC && 4xx
+ 	select CRYPTO_HASH
++	select CRYPTO_AEAD
++	select CRYPTO_AES
++	select CRYPTO_CCM
++	select CRYPTO_GCM
+ 	select CRYPTO_BLKCIPHER
+ 	help
+ 	  This option allows you to have support for AMCC crypto acceleration.
+diff --git a/drivers/crypto/amcc/crypto4xx_alg.c b/drivers/crypto/amcc/crypto4xx_alg.c
+index 22875ec2b2c8..dd4241a5bf56 100644
+--- a/drivers/crypto/amcc/crypto4xx_alg.c
++++ b/drivers/crypto/amcc/crypto4xx_alg.c
+@@ -26,6 +26,7 @@
+ #include <crypto/internal/hash.h>
+ #include <linux/dma-mapping.h>
+ #include <crypto/algapi.h>
++#include <crypto/aead.h>
+ #include <crypto/aes.h>
+ #include <crypto/sha.h>
+ #include <crypto/ctr.h>
+@@ -83,7 +84,7 @@ int crypto4xx_encrypt(struct ablkcipher_request *req)
+ 		crypto4xx_memcpy_to_le32(iv, req->info, ivlen);
+ 
+ 	return crypto4xx_build_pd(&req->base, ctx, req->src, req->dst,
+-		req->nbytes, iv, ivlen, ctx->sa_out, ctx->sa_len);
++		req->nbytes, iv, ivlen, ctx->sa_out, ctx->sa_len, 0);
+ }
+ 
+ int crypto4xx_decrypt(struct ablkcipher_request *req)
+@@ -97,7 +98,7 @@ int crypto4xx_decrypt(struct ablkcipher_request *req)
+ 		crypto4xx_memcpy_to_le32(iv, req->info, ivlen);
+ 
+ 	return crypto4xx_build_pd(&req->base, ctx, req->src, req->dst,
+-		req->nbytes, iv, ivlen, ctx->sa_in, ctx->sa_len);
++		req->nbytes, iv, ivlen, ctx->sa_in, ctx->sa_len, 0);
+ }
+ 
+ /**
+@@ -213,7 +214,7 @@ int crypto4xx_rfc3686_encrypt(struct ablkcipher_request *req)
+ 
+ 	return crypto4xx_build_pd(&req->base, ctx, req->src, req->dst,
+ 				  req->nbytes, iv, AES_IV_SIZE,
+-				  ctx->sa_out, ctx->sa_len);
++				  ctx->sa_out, ctx->sa_len, 0);
+ }
+ 
+ int crypto4xx_rfc3686_decrypt(struct ablkcipher_request *req)
+@@ -227,7 +228,7 @@ int crypto4xx_rfc3686_decrypt(struct ablkcipher_request *req)
+ 
+ 	return crypto4xx_build_pd(&req->base, ctx, req->src, req->dst,
+ 				  req->nbytes, iv, AES_IV_SIZE,
+-				  ctx->sa_out, ctx->sa_len);
++				  ctx->sa_out, ctx->sa_len, 0);
+ }
+ 
+ /**
+@@ -239,11 +240,13 @@ static int crypto4xx_hash_alg_init(struct crypto_tfm *tfm,
+ 				   unsigned char hm)
+ {
+ 	struct crypto_alg *alg = tfm->__crt_alg;
+-	struct crypto4xx_alg *my_alg = crypto_alg_to_crypto4xx_alg(alg);
++	struct crypto4xx_alg *my_alg;
+ 	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(tfm);
+ 	struct dynamic_sa_hash160 *sa;
+ 	int rc;
+ 
++	my_alg = container_of(__crypto_ahash_alg(alg), struct crypto4xx_alg,
++			      alg.u.hash);
+ 	ctx->dev   = my_alg->dev;
+ 
+ 	/* Create SA */
+@@ -300,7 +303,7 @@ int crypto4xx_hash_update(struct ahash_request *req)
+ 
+ 	return crypto4xx_build_pd(&req->base, ctx, req->src, &dst,
+ 				  req->nbytes, NULL, 0, ctx->sa_in,
+-				  ctx->sa_len);
++				  ctx->sa_len, 0);
+ }
+ 
+ int crypto4xx_hash_final(struct ahash_request *req)
+@@ -319,7 +322,7 @@ int crypto4xx_hash_digest(struct ahash_request *req)
+ 
+ 	return crypto4xx_build_pd(&req->base, ctx, req->src, &dst,
+ 				  req->nbytes, NULL, 0, ctx->sa_in,
+-				  ctx->sa_len);
++				  ctx->sa_len, 0);
+ }
+ 
+ /**
+@@ -330,5 +333,3 @@ int crypto4xx_sha1_alg_init(struct crypto_tfm *tfm)
+ 	return crypto4xx_hash_alg_init(tfm, SA_HASH160_LEN, SA_HASH_ALG_SHA1,
+ 				       SA_HASH_MODE_HASH);
+ }
+-
+-
+diff --git a/drivers/crypto/amcc/crypto4xx_core.c b/drivers/crypto/amcc/crypto4xx_core.c
+index 55a4dd8984c7..b5108259f1a6 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.c
++++ b/drivers/crypto/amcc/crypto4xx_core.c
+@@ -35,10 +35,12 @@
+ #include <asm/dcr.h>
+ #include <asm/dcr-regs.h>
+ #include <asm/cacheflush.h>
++#include <crypto/aead.h>
+ #include <crypto/aes.h>
+ #include <crypto/ctr.h>
+ #include <crypto/sha.h>
+ #include <crypto/scatterwalk.h>
++#include <crypto/internal/aead.h>
+ #include <crypto/internal/skcipher.h>
+ #include "crypto4xx_reg_def.h"
+ #include "crypto4xx_core.h"
+@@ -518,7 +520,7 @@ static void crypto4xx_ret_sg_desc(struct crypto4xx_device *dev,
+ 	}
+ }
+ 
+-static u32 crypto4xx_ablkcipher_done(struct crypto4xx_device *dev,
++static void crypto4xx_ablkcipher_done(struct crypto4xx_device *dev,
+ 				     struct pd_uinfo *pd_uinfo,
+ 				     struct ce_pd *pd)
+ {
+@@ -543,11 +545,9 @@ static u32 crypto4xx_ablkcipher_done(struct crypto4xx_device *dev,
+ 	if (pd_uinfo->state & PD_ENTRY_BUSY)
+ 		ablkcipher_request_complete(ablk_req, -EINPROGRESS);
+ 	ablkcipher_request_complete(ablk_req, 0);
+-
+-	return 0;
+ }
+ 
+-static u32 crypto4xx_ahash_done(struct crypto4xx_device *dev,
++static void crypto4xx_ahash_done(struct crypto4xx_device *dev,
+ 				struct pd_uinfo *pd_uinfo)
+ {
+ 	struct crypto4xx_ctx *ctx;
+@@ -563,20 +563,88 @@ static u32 crypto4xx_ahash_done(struct crypto4xx_device *dev,
+ 	if (pd_uinfo->state & PD_ENTRY_BUSY)
+ 		ahash_request_complete(ahash_req, -EINPROGRESS);
+ 	ahash_request_complete(ahash_req, 0);
++}
+ 
+-	return 0;
++static void crypto4xx_aead_done(struct crypto4xx_device *dev,
++				struct pd_uinfo *pd_uinfo,
++				struct ce_pd *pd)
++{
++	struct aead_request *aead_req;
++	struct crypto4xx_ctx *ctx;
++	struct scatterlist *dst = pd_uinfo->dest_va;
++	int err = 0;
++
++	aead_req = container_of(pd_uinfo->async_req, struct aead_request,
++				base);
++	ctx  = crypto_tfm_ctx(aead_req->base.tfm);
++
++	if (pd_uinfo->using_sd) {
++		crypto4xx_copy_pkt_to_dst(dev, pd, pd_uinfo,
++					  pd->pd_ctl_len.bf.pkt_len,
++					  dst);
++	} else {
++		__dma_sync_page(sg_page(dst), dst->offset, dst->length,
++				DMA_FROM_DEVICE);
++	}
++
++	if (pd_uinfo->sa_va->sa_command_0.bf.dir == DIR_OUTBOUND) {
++		/* append icv at the end */
++		size_t cp_len = crypto_aead_authsize(
++			crypto_aead_reqtfm(aead_req));
++		u32 icv[cp_len];
++
++		crypto4xx_memcpy_from_le32(icv, pd_uinfo->sr_va->save_digest,
++					   cp_len);
++
++		scatterwalk_map_and_copy(icv, dst, aead_req->cryptlen,
++					 cp_len, 1);
++	}
++
++	crypto4xx_ret_sg_desc(dev, pd_uinfo);
++
++	if (pd->pd_ctl.bf.status & 0xff) {
++		if (pd->pd_ctl.bf.status & 0x1) {
++			/* authentication error */
++			err = -EBADMSG;
++		} else {
++			if (!__ratelimit(&dev->aead_ratelimit)) {
++				if (pd->pd_ctl.bf.status & 2)
++					pr_err("pad fail error\n");
++				if (pd->pd_ctl.bf.status & 4)
++					pr_err("seqnum fail\n");
++				if (pd->pd_ctl.bf.status & 8)
++					pr_err("error _notify\n");
++				pr_err("aead return err status = 0x%02x\n",
++					pd->pd_ctl.bf.status & 0xff);
++				pr_err("pd pad_ctl = 0x%08x\n",
++					pd->pd_ctl.bf.pd_pad_ctl);
++			}
++			err = -EINVAL;
++		}
++	}
++
++	if (pd_uinfo->state & PD_ENTRY_BUSY)
++		aead_request_complete(aead_req, -EINPROGRESS);
++
++	aead_request_complete(aead_req, err);
+ }
+ 
+-static u32 crypto4xx_pd_done(struct crypto4xx_device *dev, u32 idx)
++static void crypto4xx_pd_done(struct crypto4xx_device *dev, u32 idx)
+ {
+ 	struct ce_pd *pd = &dev->pdr[idx];
+ 	struct pd_uinfo *pd_uinfo = &dev->pdr_uinfo[idx];
+ 
+-	if (crypto_tfm_alg_type(pd_uinfo->async_req->tfm) ==
+-			CRYPTO_ALG_TYPE_ABLKCIPHER)
+-		return crypto4xx_ablkcipher_done(dev, pd_uinfo, pd);
+-	else
+-		return crypto4xx_ahash_done(dev, pd_uinfo);
++	switch (crypto_tfm_alg_type(pd_uinfo->async_req->tfm)) {
++	case CRYPTO_ALG_TYPE_ABLKCIPHER:
++		crypto4xx_ablkcipher_done(dev, pd_uinfo, pd);
++		break;
++	case CRYPTO_ALG_TYPE_AEAD:
++		crypto4xx_aead_done(dev, pd_uinfo, pd);
++		break;
++	case CRYPTO_ALG_TYPE_AHASH:
++		crypto4xx_ahash_done(dev, pd_uinfo);
++		break;
++	}
+ }
+ 
+ static void crypto4xx_stop_all(struct crypto4xx_core_device *core_dev)
+@@ -612,8 +680,10 @@ int crypto4xx_build_pd(struct crypto_async_request *req,
+ 		       const unsigned int datalen,
+ 		       const __le32 *iv, const u32 iv_len,
+ 		       const struct dynamic_sa_ctl *req_sa,
+-		       const unsigned int sa_len)
++		       const unsigned int sa_len,
++		       const unsigned int assoclen)
+ {
++	struct scatterlist _dst[2];
+ 	struct crypto4xx_device *dev = ctx->dev;
+ 	struct dynamic_sa_ctl *sa;
+ 	struct ce_gd *gd;
+@@ -627,18 +697,25 @@ int crypto4xx_build_pd(struct crypto_async_request *req,
+ 	unsigned int nbytes = datalen;
+ 	size_t offset_to_sr_ptr;
+ 	u32 gd_idx = 0;
++	int tmp;
+ 	bool is_busy;
+ 
+-	/* figure how many gd is needed */
+-	num_gd = sg_nents_for_len(src, datalen);
+-	if ((int)num_gd < 0) {
++	/* figure how many gd are needed */
++	tmp = sg_nents_for_len(src, assoclen + datalen);
++	if (tmp < 0) {
+ 		dev_err(dev->core_dev->device, "Invalid number of src SG.\n");
+-		return -EINVAL;
++		return tmp;
++	}
++	if (tmp == 1)
++		tmp = 0;
++	num_gd = tmp;
++
++	if (assoclen) {
++		nbytes += assoclen;
++		dst = scatterwalk_ffwd(_dst, dst, assoclen);
+ 	}
+-	if (num_gd == 1)
+-		num_gd = 0;
+ 
+-	/* figure how many sd is needed */
++	/* figure how many sd are needed */
+ 	if (sg_is_last(dst)) {
+ 		num_sd = 0;
+ 	} else {
+@@ -724,6 +801,7 @@ int crypto4xx_build_pd(struct crypto_async_request *req,
+ 	sa = pd_uinfo->sa_va;
+ 	memcpy(sa, req_sa, sa_len * 4);
+ 
++	sa->sa_command_1.bf.hash_crypto_offset = (assoclen >> 2);
+ 	offset_to_sr_ptr = get_dynamic_sa_offset_state_ptr_field(sa);
+ 	*(u32 *)((unsigned long)sa + offset_to_sr_ptr) = pd_uinfo->sr_pa;
+ 
+@@ -830,7 +908,7 @@ int crypto4xx_build_pd(struct crypto_async_request *req,
+ 		((crypto_tfm_alg_type(req->tfm) == CRYPTO_ALG_TYPE_AHASH) |
+ 		 (crypto_tfm_alg_type(req->tfm) == CRYPTO_ALG_TYPE_AEAD) ?
+ 			PD_CTL_HASH_FINAL : 0);
+-	pd->pd_ctl_len.w = 0x00400000 | datalen;
++	pd->pd_ctl_len.w = 0x00400000 | (assoclen + datalen);
+ 	pd_uinfo->state = PD_ENTRY_INUSE | (is_busy ? PD_ENTRY_BUSY : 0);
+ 
+ 	wmb();
+@@ -843,40 +921,68 @@ int crypto4xx_build_pd(struct crypto_async_request *req,
+ /**
+  * Algorithm Registration Functions
+  */
+-static int crypto4xx_alg_init(struct crypto_tfm *tfm)
++static void crypto4xx_ctx_init(struct crypto4xx_alg *amcc_alg,
++			       struct crypto4xx_ctx *ctx)
+ {
+-	struct crypto_alg *alg = tfm->__crt_alg;
+-	struct crypto4xx_alg *amcc_alg = crypto_alg_to_crypto4xx_alg(alg);
+-	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(tfm);
+-
+ 	ctx->dev = amcc_alg->dev;
+ 	ctx->sa_in = NULL;
+ 	ctx->sa_out = NULL;
+ 	ctx->sa_len = 0;
++}
+ 
+-	switch (alg->cra_flags & CRYPTO_ALG_TYPE_MASK) {
+-	default:
+-		tfm->crt_ablkcipher.reqsize = sizeof(struct crypto4xx_ctx);
+-		break;
+-	case CRYPTO_ALG_TYPE_AHASH:
+-		crypto_ahash_set_reqsize(__crypto_ahash_cast(tfm),
+-					 sizeof(struct crypto4xx_ctx));
+-		break;
+-	}
++static int crypto4xx_ablk_init(struct crypto_tfm *tfm)
++{
++	struct crypto_alg *alg = tfm->__crt_alg;
++	struct crypto4xx_alg *amcc_alg;
++	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(tfm);
+ 
++	amcc_alg = container_of(alg, struct crypto4xx_alg, alg.u.cipher);
++	crypto4xx_ctx_init(amcc_alg, ctx);
++	tfm->crt_ablkcipher.reqsize = sizeof(struct crypto4xx_ctx);
+ 	return 0;
+ }
+ 
+-static void crypto4xx_alg_exit(struct crypto_tfm *tfm)
++static void crypto4xx_common_exit(struct crypto4xx_ctx *ctx)
+ {
+-	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(tfm);
+-
+ 	crypto4xx_free_sa(ctx);
+ }
+ 
+-int crypto4xx_register_alg(struct crypto4xx_device *sec_dev,
+-			   struct crypto4xx_alg_common *crypto_alg,
+-			   int array_size)
++static void crypto4xx_ablk_exit(struct crypto_tfm *tfm)
++{
++	crypto4xx_common_exit(crypto_tfm_ctx(tfm));
++}
++
++static int crypto4xx_aead_init(struct crypto_aead *tfm)
++{
++	struct aead_alg *alg = crypto_aead_alg(tfm);
++	struct crypto4xx_ctx *ctx = crypto_aead_ctx(tfm);
++	struct crypto4xx_alg *amcc_alg;
++
++	ctx->sw_cipher.aead = crypto_alloc_aead(alg->base.cra_name, 0,
++						CRYPTO_ALG_NEED_FALLBACK |
++						CRYPTO_ALG_ASYNC);
++	if (IS_ERR(ctx->sw_cipher.aead))
++		return PTR_ERR(ctx->sw_cipher.aead);
++
++	amcc_alg = container_of(alg, struct crypto4xx_alg, alg.u.aead);
++	crypto4xx_ctx_init(amcc_alg, ctx);
++	crypto_aead_set_reqsize(tfm, sizeof(struct aead_request) +
++				max(sizeof(struct crypto4xx_ctx), 32 +
++				crypto_aead_reqsize(ctx->sw_cipher.aead)));
++	return 0;
++}
++
++static void crypto4xx_aead_exit(struct crypto_aead *tfm)
++{
++	struct crypto4xx_ctx *ctx = crypto_aead_ctx(tfm);
++
++	crypto4xx_common_exit(ctx);
++	crypto_free_aead(ctx->sw_cipher.aead);
++}
++
++static int crypto4xx_register_alg(struct crypto4xx_device *sec_dev,
++				  struct crypto4xx_alg_common *crypto_alg,
++				  int array_size)
+ {
+ 	struct crypto4xx_alg *alg;
+ 	int i;
+@@ -891,6 +997,10 @@ int crypto4xx_register_alg(struct crypto4xx_device *sec_dev,
+ 		alg->dev = sec_dev;
+ 
+ 		switch (alg->alg.type) {
++		case CRYPTO_ALG_TYPE_AEAD:
++			rc = crypto_register_aead(&alg->alg.u.aead);
++			break;
++
+ 		case CRYPTO_ALG_TYPE_AHASH:
+ 			rc = crypto_register_ahash(&alg->alg.u.hash);
+ 			break;
+@@ -920,6 +1030,10 @@ static void crypto4xx_unregister_alg(struct crypto4xx_device *sec_dev)
+ 			crypto_unregister_ahash(&alg->alg.u.hash);
+ 			break;
+ 
++		case CRYPTO_ALG_TYPE_AEAD:
++			crypto_unregister_aead(&alg->alg.u.aead);
++			break;
++
+ 		default:
+ 			crypto_unregister_alg(&alg->alg.u.cipher);
+ 		}
+@@ -973,7 +1087,7 @@ static irqreturn_t crypto4xx_ce_interrupt_handler(int irq, void *data)
+ /**
+  * Supported Crypto Algorithms
+  */
+-struct crypto4xx_alg_common crypto4xx_alg[] = {
++static struct crypto4xx_alg_common crypto4xx_alg[] = {
+ 	/* Crypto AES modes */
+ 	{ .type = CRYPTO_ALG_TYPE_ABLKCIPHER, .u.cipher = {
+ 		.cra_name 	= "cbc(aes)",
+@@ -985,8 +1099,8 @@ struct crypto4xx_alg_common crypto4xx_alg[] = {
+ 		.cra_blocksize 	= AES_BLOCK_SIZE,
+ 		.cra_ctxsize 	= sizeof(struct crypto4xx_ctx),
+ 		.cra_type 	= &crypto_ablkcipher_type,
+-		.cra_init	= crypto4xx_alg_init,
+-		.cra_exit	= crypto4xx_alg_exit,
++		.cra_init	= crypto4xx_ablk_init,
++		.cra_exit	= crypto4xx_ablk_exit,
+ 		.cra_module 	= THIS_MODULE,
+ 		.cra_u 		= {
+ 			.ablkcipher = {
+@@ -1009,8 +1123,8 @@ struct crypto4xx_alg_common crypto4xx_alg[] = {
+ 		.cra_blocksize	= AES_BLOCK_SIZE,
+ 		.cra_ctxsize	= sizeof(struct crypto4xx_ctx),
+ 		.cra_type	= &crypto_ablkcipher_type,
+-		.cra_init	= crypto4xx_alg_init,
+-		.cra_exit	= crypto4xx_alg_exit,
++		.cra_init	= crypto4xx_ablk_init,
++		.cra_exit	= crypto4xx_ablk_exit,
+ 		.cra_module	= THIS_MODULE,
+ 		.cra_u		= {
+ 			.ablkcipher = {
+@@ -1033,8 +1147,8 @@ struct crypto4xx_alg_common crypto4xx_alg[] = {
+ 		.cra_blocksize	= AES_BLOCK_SIZE,
+ 		.cra_ctxsize	= sizeof(struct crypto4xx_ctx),
+ 		.cra_type	= &crypto_ablkcipher_type,
+-		.cra_init	= crypto4xx_alg_init,
+-		.cra_exit	= crypto4xx_alg_exit,
++		.cra_init	= crypto4xx_ablk_init,
++		.cra_exit	= crypto4xx_ablk_exit,
+ 		.cra_module	= THIS_MODULE,
+ 		.cra_u		= {
+ 			.ablkcipher = {
+@@ -1059,8 +1173,8 @@ struct crypto4xx_alg_common crypto4xx_alg[] = {
+ 		.cra_blocksize	= AES_BLOCK_SIZE,
+ 		.cra_ctxsize	= sizeof(struct crypto4xx_ctx),
+ 		.cra_type	= &crypto_ablkcipher_type,
+-		.cra_init	= crypto4xx_alg_init,
+-		.cra_exit	= crypto4xx_alg_exit,
++		.cra_init	= crypto4xx_ablk_init,
++		.cra_exit	= crypto4xx_ablk_exit,
+ 		.cra_module	= THIS_MODULE,
+ 		.cra_u		= {
+ 			.ablkcipher = {
+@@ -1082,8 +1196,8 @@ struct crypto4xx_alg_common crypto4xx_alg[] = {
+ 		.cra_blocksize	= AES_BLOCK_SIZE,
+ 		.cra_ctxsize	= sizeof(struct crypto4xx_ctx),
+ 		.cra_type	= &crypto_ablkcipher_type,
+-		.cra_init	= crypto4xx_alg_init,
+-		.cra_exit	= crypto4xx_alg_exit,
++		.cra_init	= crypto4xx_ablk_init,
++		.cra_exit	= crypto4xx_ablk_exit,
+ 		.cra_module	= THIS_MODULE,
+ 		.cra_u		= {
+ 			.ablkcipher = {
+@@ -1149,6 +1263,7 @@ static int crypto4xx_probe(struct platform_device *ofdev)
+ 	core_dev->device = dev;
+ 	spin_lock_init(&core_dev->lock);
+ 	INIT_LIST_HEAD(&core_dev->dev->alg_list);
++	ratelimit_default_init(&core_dev->dev->aead_ratelimit);
+ 	rc = crypto4xx_build_pdr(core_dev->dev);
+ 	if (rc)
+ 		goto err_build_pdr;
+diff --git a/drivers/crypto/amcc/crypto4xx_core.h b/drivers/crypto/amcc/crypto4xx_core.h
+index 650aa94cc4b8..ab89c2af1e90 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.h
++++ b/drivers/crypto/amcc/crypto4xx_core.h
+@@ -22,7 +22,9 @@
+ #ifndef __CRYPTO4XX_CORE_H__
+ #define __CRYPTO4XX_CORE_H__
+ 
++#include <linux/ratelimit.h>
+ #include <crypto/internal/hash.h>
++#include <crypto/internal/aead.h>
+ #include "crypto4xx_reg_def.h"
+ #include "crypto4xx_sa.h"
+ 
+@@ -106,6 +108,7 @@ struct crypto4xx_device {
+ 	struct pd_uinfo *pdr_uinfo;
+ 	struct list_head alg_list;	/* List of algorithm supported
+ 					by this device */
++	struct ratelimit_state aead_ratelimit;
+ };
+ 
+ struct crypto4xx_core_device {
+@@ -125,6 +128,9 @@ struct crypto4xx_ctx {
+ 	struct dynamic_sa_ctl *sa_out;
+ 	__le32 iv_nonce;
+ 	u32 sa_len;
++	union {
++		struct crypto_aead *aead;
++	} sw_cipher;
+ };
+ 
+ struct crypto4xx_alg_common {
+@@ -132,6 +138,7 @@ struct crypto4xx_alg_common {
+ 	union {
+ 		struct crypto_alg cipher;
+ 		struct ahash_alg hash;
++		struct aead_alg aead;
+ 	} u;
+ };
+ 
+@@ -141,18 +148,6 @@ struct crypto4xx_alg {
+ 	struct crypto4xx_device *dev;
+ };
+ 
+-static inline struct crypto4xx_alg *crypto_alg_to_crypto4xx_alg(
+-	struct crypto_alg *x)
+-{
+-	switch (x->cra_flags & CRYPTO_ALG_TYPE_MASK) {
+-	case CRYPTO_ALG_TYPE_AHASH:
+-		return container_of(__crypto_ahash_alg(x),
+-				    struct crypto4xx_alg, alg.u.hash);
+-	}
+-
+-	return container_of(x, struct crypto4xx_alg, alg.u.cipher);
+-}
+-
+ int crypto4xx_alloc_sa(struct crypto4xx_ctx *ctx, u32 size);
+ void crypto4xx_free_sa(struct crypto4xx_ctx *ctx);
+ void crypto4xx_free_ctx(struct crypto4xx_ctx *ctx);
+@@ -163,7 +158,8 @@ int crypto4xx_build_pd(struct crypto_async_request *req,
+ 		       const unsigned int datalen,
+ 		       const __le32 *iv, const u32 iv_len,
+ 		       const struct dynamic_sa_ctl *sa,
+-		       const unsigned int sa_len);
++		       const unsigned int sa_len,
++		       const unsigned int assoclen);
+ int crypto4xx_setkey_aes_cbc(struct crypto_ablkcipher *cipher,
+ 			     const u8 *key, unsigned int keylen);
+ int crypto4xx_setkey_aes_cfb(struct crypto_ablkcipher *cipher,
+diff --git a/drivers/crypto/amcc/crypto4xx_sa.h b/drivers/crypto/amcc/crypto4xx_sa.h
+index b79da98dc9a9..a4d403528db5 100644
+--- a/drivers/crypto/amcc/crypto4xx_sa.h
++++ b/drivers/crypto/amcc/crypto4xx_sa.h
+@@ -55,6 +55,8 @@ union dynamic_sa_contents {
+ #define SA_OP_GROUP_BASIC			0
+ #define SA_OPCODE_ENCRYPT			0
+ #define SA_OPCODE_DECRYPT			0
++#define SA_OPCODE_ENCRYPT_HASH			1
++#define SA_OPCODE_HASH_DECRYPT			1
+ #define SA_OPCODE_HASH				3
+ #define SA_CIPHER_ALG_DES			0
+ #define SA_CIPHER_ALG_3DES			1
+@@ -65,6 +67,8 @@ union dynamic_sa_contents {
+ 
+ #define SA_HASH_ALG_MD5				0
+ #define SA_HASH_ALG_SHA1			1
++#define SA_HASH_ALG_GHASH			12
++#define SA_HASH_ALG_CBC_MAC			14
+ #define SA_HASH_ALG_NULL			15
+ #define SA_HASH_ALG_SHA1_DIGEST_SIZE		20
+ 
+@@ -233,6 +237,36 @@ struct dynamic_sa_aes256 {
+ #define SA_AES256_CONTENTS	0x3e000082
+ #define SA_AES_CONTENTS		0x3e000002
+ 
++/**
++ * Security Association (SA) for AES128 CCM
++ */
++struct dynamic_sa_aes128_ccm {
++	struct dynamic_sa_ctl ctrl;
++	__le32 key[4];
++	__le32 iv[4];
++	u32 state_ptr;
++	u32 reserved;
++} __packed;
++#define SA_AES128_CCM_LEN	(sizeof(struct dynamic_sa_aes128_ccm)/4)
++#define SA_AES128_CCM_CONTENTS	0x3e000042
++#define SA_AES_CCM_CONTENTS	0x3e000002
++
++/**
++ * Security Association (SA) for AES128_GCM
++ */
++struct dynamic_sa_aes128_gcm {
++	struct dynamic_sa_ctl ctrl;
++	__le32 key[4];
++	__le32 inner_digest[4];
++	__le32 iv[4];
++	u32 state_ptr;
++	u32 reserved;
++} __packed;
++
++#define SA_AES128_GCM_LEN	(sizeof(struct dynamic_sa_aes128_gcm)/4)
++#define SA_AES128_GCM_CONTENTS	0x3e000442
++#define SA_AES_GCM_CONTENTS	0x3e000402
++
+ /**
+  * Security Association (SA) for HASH160: HMAC-SHA1
+  */
+@@ -274,4 +308,11 @@ static inline __le32 *get_dynamic_sa_key_field(struct dynamic_sa_ctl *cts)
+ 	return (__le32 *) ((unsigned long)cts + sizeof(struct dynamic_sa_ctl));
+ }
+ 
++static inline __le32 *get_dynamic_sa_inner_digest(struct dynamic_sa_ctl *cts)
++{
++	return (__le32 *) ((unsigned long)cts +
++		sizeof(struct dynamic_sa_ctl) +
++		cts->sa_contents.bf.key_size * 4);
++}
++
+ #endif
+-- 
+2.14.2
+
+From 13a1688295f004c6489cfad1b4cbeeebafd636bf Mon Sep 17 00:00:00 2001
+From: Christian Lamparter <chunkeey@gmail.com>
+Date: Tue, 3 Oct 2017 22:18:12 +0200
+Subject: [PATCH 12/13] crypto: crypto4xx: add aes-ccm support
+
+This patch adds aes-ccm support.
+
+Signed-off-by: Christian Lamparter <chunkeey@gmail.com>
+---
+ drivers/crypto/amcc/crypto4xx_alg.c  | 185 +++++++++++++++++++++++++++++++++++
+ drivers/crypto/amcc/crypto4xx_core.c |  23 +++++
+ drivers/crypto/amcc/crypto4xx_core.h |   8 ++
+ 3 files changed, 216 insertions(+)
+
+diff --git a/drivers/crypto/amcc/crypto4xx_alg.c b/drivers/crypto/amcc/crypto4xx_alg.c
+index dd4241a5bf56..b1c4783feab9 100644
+--- a/drivers/crypto/amcc/crypto4xx_alg.c
++++ b/drivers/crypto/amcc/crypto4xx_alg.c
+@@ -231,6 +231,191 @@ int crypto4xx_rfc3686_decrypt(struct ablkcipher_request *req)
+ 				  ctx->sa_out, ctx->sa_len, 0);
+ }
+ 
++static inline bool crypto4xx_aead_need_fallback(struct aead_request *req,
++						bool is_ccm, bool decrypt)
++{
++	struct crypto_aead *aead = crypto_aead_reqtfm(req);
++
++	/* authsize has to be a multiple of 4 */
++	if (aead->authsize & 3)
++		return true;
++
++	/*
++	 * hardware does not handle cases where cryptlen
++	 * is less than a block
++	 */
++	if (req->cryptlen < AES_BLOCK_SIZE)
++		return true;
++
++	/* assoc len needs to be a multiple of 4 */
++	if (req->assoclen & 0x3)
++		return true;
++
++	/* CCM supports only counter field length of 2 and 4 bytes */
++	if (is_ccm && !(req->iv[0] == 1 || req->iv[0] == 3))
++		return true;
++
++	/* CCM - fix CBC MAC mismatch in special case */
++	if (is_ccm && decrypt && !req->assoclen)
++		return true;
++
++	return false;
++}
++
++static int crypto4xx_aead_fallback(struct aead_request *req,
++	struct crypto4xx_ctx *ctx, bool do_decrypt)
++{
++	char aead_req_data[sizeof(struct aead_request) +
++			   crypto_aead_reqsize(ctx->sw_cipher.aead)]
++		__aligned(__alignof__(struct aead_request));
++
++	struct aead_request *subreq = (void *) aead_req_data;
++
++	memset(subreq, 0, sizeof(aead_req_data));
++
++	aead_request_set_tfm(subreq, ctx->sw_cipher.aead);
++	aead_request_set_callback(subreq, req->base.flags,
++				  req->base.complete, req->base.data);
++	aead_request_set_crypt(subreq, req->src, req->dst, req->cryptlen,
++			       req->iv);
++	aead_request_set_ad(subreq, req->assoclen);
++	return do_decrypt ? crypto_aead_decrypt(subreq) :
++			    crypto_aead_encrypt(subreq);
++}
++
++static int crypto4xx_setup_fallback(struct crypto4xx_ctx *ctx,
++				    struct crypto_aead *cipher,
++				    const u8 *key,
++				    unsigned int keylen)
++{
++	int rc;
++
++	crypto_aead_clear_flags(ctx->sw_cipher.aead, CRYPTO_TFM_REQ_MASK);
++	crypto_aead_set_flags(ctx->sw_cipher.aead,
++		crypto_aead_get_flags(cipher) & CRYPTO_TFM_REQ_MASK);
++	rc = crypto_aead_setkey(ctx->sw_cipher.aead, key, keylen);
++	crypto_aead_clear_flags(cipher, CRYPTO_TFM_RES_MASK);
++	crypto_aead_set_flags(cipher,
++		crypto_aead_get_flags(ctx->sw_cipher.aead) &
++			CRYPTO_TFM_RES_MASK);
++
++	return rc;
++}
++
++/**
++ * AES-CCM Functions
++ */
++
++int crypto4xx_setkey_aes_ccm(struct crypto_aead *cipher, const u8 *key,
++			     unsigned int keylen)
++{
++	struct crypto_tfm *tfm = crypto_aead_tfm(cipher);
++	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(tfm);
++	struct dynamic_sa_ctl *sa;
++	int rc = 0;
++
++	rc = crypto4xx_setup_fallback(ctx, cipher, key, keylen);
++	if (rc)
++		return rc;
++
++	if (ctx->sa_in || ctx->sa_out)
++		crypto4xx_free_sa(ctx);
++
++	rc = crypto4xx_alloc_sa(ctx, SA_AES128_CCM_LEN + (keylen - 16) / 4);
++	if (rc)
++		return rc;
++
++	/* Setup SA */
++	sa = (struct dynamic_sa_ctl *) ctx->sa_in;
++	sa->sa_contents.w = SA_AES_CCM_CONTENTS | (keylen << 2);
++
++	set_dynamic_sa_command_0(sa, SA_NOT_SAVE_HASH, SA_NOT_SAVE_IV,
++				 SA_LOAD_HASH_FROM_SA, SA_LOAD_IV_FROM_STATE,
++				 SA_NO_HEADER_PROC, SA_HASH_ALG_CBC_MAC,
++				 SA_CIPHER_ALG_AES,
++				 SA_PAD_TYPE_ZERO, SA_OP_GROUP_BASIC,
++				 SA_OPCODE_HASH_DECRYPT, DIR_INBOUND);
++
++	set_dynamic_sa_command_1(sa, CRYPTO_MODE_CTR, SA_HASH_MODE_HASH,
++				 CRYPTO_FEEDBACK_MODE_NO_FB, SA_EXTENDED_SN_OFF,
++				 SA_SEQ_MASK_OFF, SA_MC_ENABLE,
++				 SA_NOT_COPY_PAD, SA_COPY_PAYLOAD,
++				 SA_NOT_COPY_HDR);
++
++	sa->sa_command_1.bf.key_len = keylen >> 3;
++
++	crypto4xx_memcpy_to_le32(get_dynamic_sa_key_field(sa), key, keylen);
++
++	memcpy(ctx->sa_out, ctx->sa_in, ctx->sa_len * 4);
++	sa = (struct dynamic_sa_ctl *) ctx->sa_out;
++
++	set_dynamic_sa_command_0(sa, SA_SAVE_HASH, SA_NOT_SAVE_IV,
++				 SA_LOAD_HASH_FROM_SA, SA_LOAD_IV_FROM_STATE,
++				 SA_NO_HEADER_PROC, SA_HASH_ALG_CBC_MAC,
++				 SA_CIPHER_ALG_AES,
++				 SA_PAD_TYPE_ZERO, SA_OP_GROUP_BASIC,
++				 SA_OPCODE_ENCRYPT_HASH, DIR_OUTBOUND);
++
++	set_dynamic_sa_command_1(sa, CRYPTO_MODE_CTR, SA_HASH_MODE_HASH,
++				 CRYPTO_FEEDBACK_MODE_NO_FB, SA_EXTENDED_SN_OFF,
++				 SA_SEQ_MASK_OFF, SA_MC_ENABLE,
++				 SA_COPY_PAD, SA_COPY_PAYLOAD,
++				 SA_NOT_COPY_HDR);
++
++	sa->sa_command_1.bf.key_len = keylen >> 3;
++	return 0;
++}
++
++static int crypto4xx_crypt_aes_ccm(struct aead_request *req, bool decrypt)
++{
++	struct crypto4xx_ctx *ctx  = crypto_tfm_ctx(req->base.tfm);
++	struct crypto_aead *aead = crypto_aead_reqtfm(req);
++	unsigned int len = req->cryptlen;
++	__le32 iv[16];
++	u32 tmp_sa[ctx->sa_len * 4];
++	struct dynamic_sa_ctl *sa = (struct dynamic_sa_ctl *)tmp_sa;
++
++	if (crypto4xx_aead_need_fallback(req, true, decrypt))
++		return crypto4xx_aead_fallback(req, ctx, decrypt);
++
++	if (decrypt)
++		len -= crypto_aead_authsize(aead);
++
++	memcpy(tmp_sa, decrypt ? ctx->sa_in : ctx->sa_out, sizeof(tmp_sa));
++	sa->sa_command_0.bf.digest_len = crypto_aead_authsize(aead) >> 2;
++
++	if (req->iv[0] == 1) {
++		/* CRYPTO_MODE_AES_ICM */
++		sa->sa_command_1.bf.crypto_mode9_8 = 1;
++	}
++
++	iv[3] = cpu_to_le32(0);
++	crypto4xx_memcpy_to_le32(iv, req->iv, 16 - (req->iv[0] + 1));
++
++	return crypto4xx_build_pd(&req->base, ctx, req->src, req->dst,
++				  len, iv, sizeof(iv),
++				  sa, ctx->sa_len, req->assoclen);
++}
++
++int crypto4xx_encrypt_aes_ccm(struct aead_request *req)
++{
++	return crypto4xx_crypt_aes_ccm(req, false);
++}
++
++int crypto4xx_decrypt_aes_ccm(struct aead_request *req)
++{
++	return crypto4xx_crypt_aes_ccm(req, true);
++}
++
++int crypto4xx_setauthsize_aead(struct crypto_aead *cipher,
++			       unsigned int authsize)
++{
++	struct crypto_tfm *tfm = crypto_aead_tfm(cipher);
++	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(tfm);
++
++	return crypto_aead_setauthsize(ctx->sw_cipher.aead, authsize);
++}
++
+ /**
+  * HASH SHA1 Functions
+  */
+diff --git a/drivers/crypto/amcc/crypto4xx_core.c b/drivers/crypto/amcc/crypto4xx_core.c
+index b5108259f1a6..85c650323c97 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.c
++++ b/drivers/crypto/amcc/crypto4xx_core.c
+@@ -1210,6 +1210,29 @@ static struct crypto4xx_alg_common crypto4xx_alg[] = {
+ 			}
+ 		}
+ 	} },
++
++	/* AEAD */
++	{ .type = CRYPTO_ALG_TYPE_AEAD, .u.aead = {
++		.setkey		= crypto4xx_setkey_aes_ccm,
++		.setauthsize	= crypto4xx_setauthsize_aead,
++		.encrypt	= crypto4xx_encrypt_aes_ccm,
++		.decrypt	= crypto4xx_decrypt_aes_ccm,
++		.init		= crypto4xx_aead_init,
++		.exit		= crypto4xx_aead_exit,
++		.ivsize		= AES_BLOCK_SIZE,
++		.maxauthsize    = 16,
++		.base = {
++			.cra_name	= "ccm(aes)",
++			.cra_driver_name = "ccm-aes-ppc4xx",
++			.cra_priority	= CRYPTO4XX_CRYPTO_PRIORITY,
++			.cra_flags	= CRYPTO_ALG_ASYNC |
++					  CRYPTO_ALG_NEED_FALLBACK |
++					  CRYPTO_ALG_KERN_DRIVER_ONLY,
++			.cra_blocksize	= 1,
++			.cra_ctxsize	= sizeof(struct crypto4xx_ctx),
++			.cra_module	= THIS_MODULE,
++		},
++	} },
+ };
+ 
+ /**
+diff --git a/drivers/crypto/amcc/crypto4xx_core.h b/drivers/crypto/amcc/crypto4xx_core.h
+index ab89c2af1e90..bdd5954c2388 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.h
++++ b/drivers/crypto/amcc/crypto4xx_core.h
+@@ -222,4 +222,12 @@ static inline void crypto4xx_memcpy_to_le32(__le32 *dst, const void *buf,
+ {
+ 	crypto4xx_memcpy_swab32((u32 *)dst, buf, len);
+ }
++
++int crypto4xx_setauthsize_aead(struct crypto_aead *ciper,
++			       unsigned int authsize);
++int crypto4xx_setkey_aes_ccm(struct crypto_aead *cipher,
++			     const u8 *key, unsigned int keylen);
++int crypto4xx_encrypt_aes_ccm(struct aead_request *req);
++int crypto4xx_decrypt_aes_ccm(struct aead_request *req);
++
+ #endif
+-- 
+2.14.2
+
+From c480dc1a3c9e90839c91aa380fdf0794c10f8589 Mon Sep 17 00:00:00 2001
+From: Christian Lamparter <chunkeey@gmail.com>
+Date: Tue, 3 Oct 2017 22:24:52 +0200
+Subject: [PATCH 13/13] crypto: crypto4xx: add aes-gcm support
+
+This patch adds aes-gcm support to crypto4xx.
+
+Signed-off-by: Christian Lamparter <chunkeey@gmail.com>
+---
+ drivers/crypto/amcc/crypto4xx_alg.c  | 139 +++++++++++++++++++++++++++++++++++
+ drivers/crypto/amcc/crypto4xx_core.c |  22 ++++++
+ drivers/crypto/amcc/crypto4xx_core.h |   4 +
+ 3 files changed, 165 insertions(+)
+
+diff --git a/drivers/crypto/amcc/crypto4xx_alg.c b/drivers/crypto/amcc/crypto4xx_alg.c
+index b1c4783feab9..eeaf27859d80 100644
+--- a/drivers/crypto/amcc/crypto4xx_alg.c
++++ b/drivers/crypto/amcc/crypto4xx_alg.c
+@@ -28,6 +28,7 @@
+ #include <crypto/algapi.h>
+ #include <crypto/aead.h>
+ #include <crypto/aes.h>
++#include <crypto/gcm.h>
+ #include <crypto/sha.h>
+ #include <crypto/ctr.h>
+ #include "crypto4xx_reg_def.h"
+@@ -416,6 +417,144 @@ int crypto4xx_setauthsize_aead(struct crypto_aead *cipher,
+ 	return crypto_aead_setauthsize(ctx->sw_cipher.aead, authsize);
+ }
+ 
++/**
++ * AES-GCM Functions
++ */
++
++static int crypto4xx_aes_gcm_validate_keylen(unsigned int keylen)
++{
++	switch (keylen) {
++	case 16:
++	case 24:
++	case 32:
++		return 0;
++	default:
++		return -EINVAL;
++	}
++}
++
++static int crypto4xx_compute_gcm_hash_key_sw(__le32 *hash_start, const u8 *key,
++					     unsigned int keylen)
++{
++	struct crypto_cipher *aes_tfm = NULL;
++	uint8_t src[16] = { 0 };
++	int rc = 0;
++
++	aes_tfm = crypto_alloc_cipher("aes", 0, CRYPTO_ALG_ASYNC |
++				      CRYPTO_ALG_NEED_FALLBACK);
++	if (IS_ERR(aes_tfm)) {
++		rc = PTR_ERR(aes_tfm);
++		pr_warn("could not load aes cipher driver: %d\n", rc);
++		return rc;
++	}
++
++	rc = crypto_cipher_setkey(aes_tfm, key, keylen);
++	if (rc) {
++		pr_err("setkey() failed: %d\n", rc);
++		goto out;
++	}
++
++	crypto_cipher_encrypt_one(aes_tfm, src, src);
++	crypto4xx_memcpy_to_le32(hash_start, src, 16);
++out:
++	crypto_free_cipher(aes_tfm);
++	return rc;
++}
++
++int crypto4xx_setkey_aes_gcm(struct crypto_aead *cipher,
++			     const u8 *key, unsigned int keylen)
++{
++	struct crypto_tfm *tfm = crypto_aead_tfm(cipher);
++	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(tfm);
++	struct dynamic_sa_ctl *sa;
++	int    rc = 0;
++
++	if (crypto4xx_aes_gcm_validate_keylen(keylen) != 0) {
++		crypto_aead_set_flags(cipher, CRYPTO_TFM_RES_BAD_KEY_LEN);
++		return -EINVAL;
++	}
++
++	rc = crypto4xx_setup_fallback(ctx, cipher, key, keylen);
++	if (rc)
++		return rc;
++
++	if (ctx->sa_in || ctx->sa_out)
++		crypto4xx_free_sa(ctx);
++
++	rc = crypto4xx_alloc_sa(ctx, SA_AES128_GCM_LEN + (keylen - 16) / 4);
++	if (rc)
++		return rc;
++
++	sa  = (struct dynamic_sa_ctl *) ctx->sa_in;
++
++	sa->sa_contents.w = SA_AES_GCM_CONTENTS | (keylen << 2);
++	set_dynamic_sa_command_0(sa, SA_SAVE_HASH, SA_NOT_SAVE_IV,
++				 SA_LOAD_HASH_FROM_SA, SA_LOAD_IV_FROM_STATE,
++				 SA_NO_HEADER_PROC, SA_HASH_ALG_GHASH,
++				 SA_CIPHER_ALG_AES, SA_PAD_TYPE_ZERO,
++				 SA_OP_GROUP_BASIC, SA_OPCODE_HASH_DECRYPT,
++				 DIR_INBOUND);
++	set_dynamic_sa_command_1(sa, CRYPTO_MODE_CTR, SA_HASH_MODE_HASH,
++				 CRYPTO_FEEDBACK_MODE_NO_FB, SA_EXTENDED_SN_OFF,
++				 SA_SEQ_MASK_ON, SA_MC_DISABLE,
++				 SA_NOT_COPY_PAD, SA_COPY_PAYLOAD,
++				 SA_NOT_COPY_HDR);
++
++	sa->sa_command_1.bf.key_len = keylen >> 3;
++
++	crypto4xx_memcpy_to_le32(get_dynamic_sa_key_field(sa),
++				 key, keylen);
++
++	rc = crypto4xx_compute_gcm_hash_key_sw(get_dynamic_sa_inner_digest(sa),
++		key, keylen);
++	if (rc) {
++		pr_err("GCM hash key setting failed = %d\n", rc);
++		goto err;
++	}
++
++	memcpy(ctx->sa_out, ctx->sa_in, ctx->sa_len * 4);
++	sa = (struct dynamic_sa_ctl *) ctx->sa_out;
++	sa->sa_command_0.bf.dir = DIR_OUTBOUND;
++	sa->sa_command_0.bf.opcode = SA_OPCODE_ENCRYPT_HASH;
++
++	return 0;
++err:
++	crypto4xx_free_sa(ctx);
++	return rc;
++}
++
++static inline int crypto4xx_crypt_aes_gcm(struct aead_request *req,
++					  bool decrypt)
++{
++	struct crypto4xx_ctx *ctx = crypto_tfm_ctx(req->base.tfm);
++	unsigned int len = req->cryptlen;
++	__le32 iv[4];
++
++	if (crypto4xx_aead_need_fallback(req, false, decrypt))
++		return crypto4xx_aead_fallback(req, ctx, decrypt);
++
++	crypto4xx_memcpy_to_le32(iv, req->iv, GCM_AES_IV_SIZE);
++	iv[3] = cpu_to_le32(1);
++
++	if (decrypt)
++		len -= crypto_aead_authsize(crypto_aead_reqtfm(req));
++
++	return crypto4xx_build_pd(&req->base, ctx, req->src, req->dst,
++				  len, iv, sizeof(iv),
++				  decrypt ? ctx->sa_in : ctx->sa_out,
++				  ctx->sa_len, req->assoclen);
++}
++
++int crypto4xx_encrypt_aes_gcm(struct aead_request *req)
++{
++	return crypto4xx_crypt_aes_gcm(req, false);
++}
++
++int crypto4xx_decrypt_aes_gcm(struct aead_request *req)
++{
++	return crypto4xx_crypt_aes_gcm(req, true);
++}
++
+ /**
+  * HASH SHA1 Functions
+  */
+diff --git a/drivers/crypto/amcc/crypto4xx_core.c b/drivers/crypto/amcc/crypto4xx_core.c
+index 85c650323c97..c44954e274bc 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.c
++++ b/drivers/crypto/amcc/crypto4xx_core.c
+@@ -38,6 +38,7 @@
+ #include <crypto/aead.h>
+ #include <crypto/aes.h>
+ #include <crypto/ctr.h>
++#include <crypto/gcm.h>
+ #include <crypto/sha.h>
+ #include <crypto/scatterwalk.h>
+ #include <crypto/internal/aead.h>
+@@ -1233,6 +1234,27 @@ static struct crypto4xx_alg_common crypto4xx_alg[] = {
+ 			.cra_module	= THIS_MODULE,
+ 		},
+ 	} },
++	{ .type = CRYPTO_ALG_TYPE_AEAD, .u.aead = {
++		.setkey		= crypto4xx_setkey_aes_gcm,
++		.setauthsize	= crypto4xx_setauthsize_aead,
++		.encrypt	= crypto4xx_encrypt_aes_gcm,
++		.decrypt	= crypto4xx_decrypt_aes_gcm,
++		.init		= crypto4xx_aead_init,
++		.exit		= crypto4xx_aead_exit,
++		.ivsize		= GCM_AES_IV_SIZE,
++		.maxauthsize	= 16,
++		.base = {
++			.cra_name	= "gcm(aes)",
++			.cra_driver_name = "gcm-aes-ppc4xx",
++			.cra_priority	= CRYPTO4XX_CRYPTO_PRIORITY,
++			.cra_flags	= CRYPTO_ALG_ASYNC |
++					  CRYPTO_ALG_NEED_FALLBACK |
++					  CRYPTO_ALG_KERN_DRIVER_ONLY,
++			.cra_blocksize	= 1,
++			.cra_ctxsize	= sizeof(struct crypto4xx_ctx),
++			.cra_module	= THIS_MODULE,
++		},
++	} },
+ };
+ 
+ /**
+diff --git a/drivers/crypto/amcc/crypto4xx_core.h b/drivers/crypto/amcc/crypto4xx_core.h
+index bdd5954c2388..8ac3bd37203b 100644
+--- a/drivers/crypto/amcc/crypto4xx_core.h
++++ b/drivers/crypto/amcc/crypto4xx_core.h
+@@ -229,5 +229,9 @@ int crypto4xx_setkey_aes_ccm(struct crypto_aead *cipher,
+ 			     const u8 *key, unsigned int keylen);
+ int crypto4xx_encrypt_aes_ccm(struct aead_request *req);
+ int crypto4xx_decrypt_aes_ccm(struct aead_request *req);
++int crypto4xx_setkey_aes_gcm(struct crypto_aead *cipher,
++			     const u8 *key, unsigned int keylen);
++int crypto4xx_encrypt_aes_gcm(struct aead_request *req);
++int crypto4xx_decrypt_aes_gcm(struct aead_request *req);
+ 
+ #endif
+-- 
+2.14.2
+

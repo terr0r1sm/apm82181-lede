@@ -1,0 +1,81 @@
+--- a/drivers/crypto/amcc/crypto4xx_core.c
++++ b/drivers/crypto/amcc/crypto4xx_core.c
+@@ -120,9 +121,12 @@ static void crypto4xx_hw_init(struct cry
+ 	/*clear all pending interrupt*/
+ 	writel(PPC4XX_INTERRUPT_CLR, dev->ce_base + CRYPTO4XX_INT_CLR);
+ 	writel(PPC4XX_INT_DESCR_CNT, dev->ce_base + CRYPTO4XX_INT_DESCR_CNT);
+-	writel(PPC4XX_INT_DESCR_CNT, dev->ce_base + CRYPTO4XX_INT_DESCR_CNT);
+-	writel(PPC4XX_INT_CFG, dev->ce_base + CRYPTO4XX_INT_CFG);
+-	writel(PPC4XX_PD_DONE_INT, dev->ce_base + CRYPTO4XX_INT_EN);
++
++        writel(PPC4XX_INT_TIMEOUT_CNT_REVB << 10,
++	       dev->ce_base + CRYPTO4XX_INT_TIMEOUT_CNT);
++	/* For RevB, 460EX and 460ExR Rev B */
++	writel(PPC4XX_PD_DONE_INT | PPC4XX_TMO_ERR_INT,
++		dev->ce_base + CRYPTO4XX_INT_EN);
+ }
+ 
+ int crypto4xx_alloc_sa(struct crypto4xx_ctx *ctx, u32 size)
+@@ -1097,12 +1126,22 @@ static irqreturn_t crypto4xx_ce_interrup
+ {
+ 	struct device *dev = (struct device *)data;
+ 	struct crypto4xx_core_device *core_dev = dev_get_drvdata(dev);
++	u32 int_status, dev_status;
+ 
+ 	if (!core_dev->dev->ce_base)
+ 		return 0;
+ 
+-	writel(PPC4XX_INTERRUPT_CLR,
+-	       core_dev->dev->ce_base + CRYPTO4XX_INT_CLR);
++//	writel(PPC4XX_INTERRUPT_CLR,
++//	       core_dev->dev->ce_base + CRYPTO4XX_INT_CLR);
++
++//	int_status = readl(core_dev->dev->ce_base + CRYPTO4XX_INT_UNMASK_STAT);
++//	printk("Interrupt status = 0x%08x\n", int_status);
++
++//	dev_status = readl(core_dev->dev->ce_base + CRYPTO4XX_DEVICE_INFO);
++//	printk("dev status = 0x%08x\n", dev_status);
++	writel(PPC4XX_INTERRUPT_CLR_REVB,
++		core_dev->dev->ce_base + CRYPTO4XX_INT_CLR);
++
+ 	tasklet_schedule(&core_dev->tasklet);
+ 
+ 	return IRQ_HANDLED;
+@@ -1146,6 +1248,8 @@ static int crypto4xx_probe(struct platfo
+ 	struct resource res;
+ 	struct device *dev = &ofdev->dev;
+ 	struct crypto4xx_core_device *core_dev;
++	unsigned int pvr;
++	unsigned short min;
+ 
+ 	rc = of_address_to_resource(ofdev->dev.of_node, 0, &res);
+ 	if (rc)
+@@ -1206,7 +1310,7 @@ static int crypto4xx_probe(struct platfo
+ 	/* Register for Crypto isr, Crypto Engine IRQ */
+ 	core_dev->irq = irq_of_parse_and_map(ofdev->dev.of_node, 0);
+ 	rc = request_irq(core_dev->irq, crypto4xx_ce_interrupt_handler, 0,
+-			 core_dev->dev->name, dev);
++			 "crypto4xx", dev);
+ 	if (rc)
+ 		goto err_request_irq;
+ 
+--- a/drivers/crypto/amcc/crypto4xx_reg_def.h
++++ b/drivers/crypto/amcc/crypto4xx_reg_def.h
+@@ -121,13 +121,16 @@
+ #define PPC4XX_PD_SIZE				6
+ #define PPC4XX_CTX_DONE_INT			0x2000
+ #define PPC4XX_PD_DONE_INT			0x8000
++#define PPC4XX_TMO_ERR_INT			0x40000
+ #define PPC4XX_BYTE_ORDER			0x22222
+ #define PPC4XX_INTERRUPT_CLR			0x3ffff
++#define PPC4XX_INTERRUPT_CLR_REVB		0x7ffff
+ #define PPC4XX_PRNG_CTRL_AUTO_EN		0x3
+ #define PPC4XX_DC_3DES_EN			1
+ #define PPC4XX_TRNG_EN				0x00020000
+-#define PPC4XX_INT_DESCR_CNT			4
++#define PPC4XX_INT_DESCR_CNT			7
+ #define PPC4XX_INT_TIMEOUT_CNT			0
++#define PPC4XX_INT_TIMEOUT_CNT_REVB		0x3FF
+ #define PPC4XX_INT_CFG				1
+ /**
+  * all follow define are ad hoc

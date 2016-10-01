@@ -1,0 +1,18 @@
+--- a/drivers/crypto/Kconfig	2017-08-24 00:54:03.248234786 +0200
++++ b/drivers/crypto/Kconfig	2017-09-15 22:54:55.682909067 +0200
+@@ -314,7 +288,15 @@ config CRYPTO_DEV_IXP4XX
+ config CRYPTO_DEV_PPC4XX
+ 	tristate "Driver AMCC PPC4xx crypto accelerator"
+ 	depends on PPC && 4xx
++	select CRYPTO_AES
++	select CRYPTO_ECB
++	select CRYPTO_GCM
++	select CRYPTO_CCM
++	select CRYPTO_SHA1
++	select CRYPTO_SHA256
++	select CRYPTO_ENGINE
+ 	select CRYPTO_HASH
++	select CRYPTO_AEAD
+ 	select CRYPTO_BLKCIPHER
+ 	help
+ 	  This option allows you to have support for AMCC crypto acceleration.
