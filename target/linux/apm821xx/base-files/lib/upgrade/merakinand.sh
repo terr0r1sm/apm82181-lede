@@ -5,18 +5,18 @@
 # Custom upgrade script for Meraki NAND devices (ex. MR24)
 # Based on merakinand.sh from the ar71xx target
 #
-. /lib/apm821xx.sh
 . /lib/functions.sh
 
 merakinand_do_kernel_check() {
 	local board_name="$1"
 	local tar_file="$2"
-	local image_magic_word=`(tar xf $tar_file sysupgrade-$board_name/kernel -O 2>/dev/null | dd bs=1 count=4 skip=0 2>/dev/null | hexdump -v -n 4 -e '1/1 "%02x"')`
+	local kernelfile=`/usr/lib/tar-sym.sh $tar_file sysupgrade-$board_name/kernel`
+	local image_magic_word=`(tar Oxf $tar_file $kernelfile 2>/dev/null | dd bs=1 count=4 skip=0 2>/dev/null | hexdump -v -n 4 -e '1/1 "%02x"')`
 
 	# What is our kernel magic string?
 	case "$board_name" in
-	"mr24"|\
-	"mx60")
+	"meraki,ikarem"|\
+	"meraki,buckminster")
 		[ "$image_magic_word" == "8e73ed8a" ] && {
 			echo "pass" && return 0
 		}
@@ -29,13 +29,15 @@ merakinand_do_kernel_check() {
 merakinand_do_platform_check() {
 	local board_name="$1"
 	local tar_file="$2"
-	local control_length=`(tar xf $tar_file sysupgrade-$board_name/CONTROL -O | wc -c) 2> /dev/null`
-	local file_type="$(identify_tar $2 sysupgrade-$board_name/root)"
+	local controlfile=`/usr/lib/tar-sym.sh $tar_file sysupgrade-$board_name/CONTROL`
+	local rootfsfile=`/usr/lib/tar-sym.sh $tar_file sysupgrade-$board_name/root`
+	local control_length=`(tar Oxf $tar_file $controlfile | wc -c) 2> /dev/null`
+	local file_type="$(identify_tar $2 $rootfsfile)"
 	local kernel_magic="$(merakinand_do_kernel_check $1 $2)"
 
 	case "$board_name" in
-	"mr24"|\
-	"mx60")
+	"meraki,ikarem"|\
+	"meraki,buckminster")
 		[ "$control_length" = 0 -o "$file_type" != "squashfs" -o "$kernel_magic" != "pass" ] && {
 			echo "Invalid sysupgrade file for $board_name"
 			return 1
@@ -56,8 +58,8 @@ merakinand_do_upgrade() {
 
 	# Do we need to do any platform tweaks?
 	case "$board_name" in
-	"mr24"|\
-	"mx60")
+	"meraki,ikarem"|\
+	"meraki,buckminster")
 		nand_do_upgrade $1
 		;;
 	*)

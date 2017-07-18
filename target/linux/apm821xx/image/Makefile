@@ -15,7 +15,7 @@ define Device/Default
   KERNEL_ENTRY := 0x00000000
   KERNEL_LOADADDR := 0x00000000
   DEVICE_DTS_DIR := ../dts
-  SUPPORTED_DEVICES = $$(DEVICE_PROFILE)
+  SUPPORTED_DEVICES = $$(DEVICE_PROFILE) $$(DT_NAME)
 endef
 
 define Build/dtb
@@ -72,6 +72,7 @@ define Device/mr24
   DEVICE_TITLE := Cisco Meraki MR24
   DEVICE_PACKAGES := kmod-spi-gpio
   DEVICE_PROFILE := mr24
+  DT_NAME := meraki,ikarem
   DEVICE_DTS := MR24
   BLOCKSIZE := 63k
   IMAGES := sysupgrade.tar
@@ -93,6 +94,7 @@ define Device/mx60
   DEVICE_PACKAGES := kmod-spi-gpio kmod-usb-ledtrig-usbport kmod-usb-dwc2 \
   kmod-usb-storage block-mount
   DEVICE_PROFILE := mx60
+  DT_NAME := meraki,buckminster
   DEVICE_DTS := MX60
   BLOCKSIZE := 63k
   IMAGES := sysupgrade.tar
@@ -158,6 +160,7 @@ define Device/WNDR4700
 	kmod-md-mod kmod-nls-cp437 kmod-nls-iso8859-1 kmod-nls-iso8859-15 \
 	kmod-nls-utf8 kmod-usb3 kmod-usb-dwc2 kmod-usb-storage \
 	partx-utils
+  DT_NAME := netgear,wndr4700
   DEVICE_NAME := wndr4700
   DEVICE_PROFILE := wndr4700
   DEVICE_DTS := wndr4700
@@ -219,6 +222,7 @@ define Device/MyBookLiveDefault
   KERNEL_INITRAMFS := kernel-bin | dtb | gzip | uImage gzip
   BOOT_SIZE := 8
   IMAGES := rootfs.img kernel.dtb
+  DT_NAME := amcc,apollo3g
   DEVICE_DTB := apollo3g.dtb
   DEVICE_PROFILE := mbl
   FILESYSTEMS := ext4

@@ -9,18 +9,18 @@ platform_check_image() {
 	[ "$#" -gt 1 ] && return 1
 
 	case "$board" in
-	mbl)
+	amcc,apollo3g)
 		mbl_do_platform_check $board "$1"
 		return $?;
 		;;
 
-	mr24|\
-	mx60)
+	meraki,ikarem|\
+	meraki,buckminster)
 		merakinand_do_platform_check $board "$1"
 		return $?;
 		;;
 
-	wndr4700)
+	netgear,wndr4700)
 		nand_do_platform_check $board "$1"
 		return $?;
 		;;
@@ -37,12 +37,12 @@ platform_pre_upgrade() {
 	local board=$(board_name)
 
 	case "$board" in
-	mr24|\
-	mx60)
+	meraki,ikarem|\
+	meraki,buckminster)
 		merakinand_do_upgrade "$1"
 		;;
 
-	wndr4700)
+	netgear,wndr4700)
 		nand_do_upgrade "$1"
 		;;
 
@@ -55,7 +55,7 @@ platform_do_upgrade() {
 	local board=$(board_name)
 
 	case "$board" in
-	mbl)
+	amcc,apollo3g)
 		mbl_do_upgrade "$ARGV"
 		;;
 
@@ -69,7 +69,7 @@ platform_copy_config() {
 	local board=$(board_name)
 
 	case "$board" in
-	mbl)
+	amcc,apollo3g)
 		mbl_copy_config
 		;;
 
