@@ -54,6 +54,7 @@ switch_to_ramfs() {
 		ubiupdatevol ubiattach ubiblock ubiformat		\
 		ubidetach ubirsvol ubirmvol ubimkvol			\
 		snapshot snapshot_tool					\
+		/usr/lib/tar-sym.sh strings head seq			\
 		$RAMFS_COPY_BIN
 	do
 		local file="$(which "$binary" 2>/dev/null)"
