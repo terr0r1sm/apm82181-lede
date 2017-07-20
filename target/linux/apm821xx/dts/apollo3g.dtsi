@@ -64,6 +64,7 @@
 			output-low;
 		};
 
+#if 0
 		enable-button {
 			/* Defined in u-boot as: NOT_NOR
 			 * "enables features other than NOR
@@ -80,6 +81,7 @@
 			gpios = <1 GPIO_ACTIVE_HIGH>;
 			output-low;
 		};
+#endif
 
 		enable-usb {
 			gpio-hog;
@@ -112,6 +114,16 @@
 		#gpio-cells = <2>;
 		gpio-controller;
 		no-output;
+	};
+
+	gpio-poweroff {
+		compatible = "gpio-poweroff";
+		gpios = <&GPIO1 1 GPIO_ACTIVE_HIGH>;
+
+		/* this will switch off the NOR,
+		 * so upon reboot, the device gets stuck
+		 * since it can't access u-boot
+		 */
 	};
 
 	gpio-leds {
